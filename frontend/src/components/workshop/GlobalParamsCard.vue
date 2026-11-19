@@ -145,6 +145,29 @@ onMounted(loadPresets)
         <label class="block text-xs text-[var(--color-ink-light)] mb-1">每章字数</label>
         <input v-model.number="state.wordNumber.value" type="number" min="500" class="w-full border border-[var(--color-parchment-darker)] rounded-md px-3 py-2 text-sm" />
       </div>
+      <div class="sm:col-span-2 flex items-center justify-between flex-wrap gap-2 bg-[var(--color-parchment)]/50 px-3 py-2 rounded-lg border border-[var(--color-parchment-darker)] text-xs">
+        <div class="flex items-center gap-1.5 flex-wrap">
+          <span class="text-[var(--color-ink-light)] font-medium">📏 快捷篇幅：</span>
+          <button
+            @click="state.numChapters.value = 120; state.wordNumber.value = 2500"
+            type="button"
+            class="px-2 py-0.5 rounded border border-[var(--color-parchment-darker)] bg-white hover:border-[var(--color-leather)] cursor-pointer"
+          >30万字 (120章)</button>
+          <button
+            @click="state.numChapters.value = 200; state.wordNumber.value = 2500"
+            type="button"
+            class="px-2 py-0.5 rounded border border-[var(--color-leather)] bg-amber-50 text-[var(--color-leather)] font-bold cursor-pointer"
+          >50万字 (200章·推荐)</button>
+          <button
+            @click="state.numChapters.value = 340; state.wordNumber.value = 3000"
+            type="button"
+            class="px-2 py-0.5 rounded border border-[var(--color-parchment-darker)] bg-white hover:border-[var(--color-leather)] cursor-pointer"
+          >102万字 (340章)</button>
+        </div>
+        <span class="font-mono font-bold text-[var(--color-leather)]">
+          预计总字数：{{ (((state.numChapters.value || 0) * (state.wordNumber.value || 0)) / 10000).toFixed(1) }} 万字
+        </span>
+      </div>
 
       <!-- XP 类型/核心玩法 -->
       <div class="sm:col-span-2 space-y-2">

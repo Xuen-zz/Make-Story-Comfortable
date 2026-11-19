@@ -153,10 +153,10 @@ watch(() => projectStore.filepath, loadChapterList)
         <div
           class="px-4 py-3 bg-[var(--color-parchment)] border-b border-[var(--color-parchment-darker)] flex items-center justify-between"
         >
-          <span class="font-medium text-sm text-[var(--color-leather)]">章节列表</span>
+          <span class="font-medium text-sm text-zinc-100">章节列表</span>
           <button
             @click="loadChapterList"
-            class="text-xs text-[var(--color-ink-light)] hover:text-[var(--color-leather)] transition-colors"
+            class="text-xs text-[var(--color-ink-light)] hover:text-zinc-100 transition-colors"
             type="button"
           >
             🔄
@@ -180,7 +180,7 @@ watch(() => projectStore.filepath, loadChapterList)
               class="w-full text-left px-4 py-2.5 text-sm hover:bg-[var(--color-parchment)] transition-colors flex items-center justify-between gap-2 border-b border-[var(--color-parchment-dark)]"
               :class="
                 currentChapter === ch.num
-                  ? 'bg-[var(--color-parchment)] font-medium text-[var(--color-leather)]'
+                  ? 'bg-[var(--color-parchment)] font-medium text-zinc-100'
                   : 'text-[var(--color-ink)]'
               "
               type="button"
@@ -212,7 +212,7 @@ watch(() => projectStore.filepath, loadChapterList)
           class="px-4 py-3 bg-[var(--color-parchment)] border-b border-[var(--color-parchment-darker)] flex items-center justify-between flex-wrap gap-2"
         >
           <div class="flex items-center gap-2">
-            <span class="font-medium text-sm text-[var(--color-leather)]">
+            <span class="font-medium text-sm text-zinc-100">
               {{
                 mode === 'single' && currentChapter
                   ? `第 ${currentChapter} 章`
@@ -313,7 +313,7 @@ watch(() => projectStore.filepath, loadChapterList)
         </div>
 
         <!-- 内容区 -->
-        <div class="flex-1 overflow-y-auto p-6" style="max-height: 70vh">
+        <div class="flex-1 overflow-y-auto p-6 bg-[#131417]" style="max-height: 70vh">
           <div v-if="loading" class="text-sm text-[var(--color-ink-light)] italic text-center py-8">
             加载中…
           </div>
@@ -327,13 +327,13 @@ watch(() => projectStore.filepath, loadChapterList)
             <textarea
               v-else-if="editing"
               v-model="editContent"
-              class="w-full mx-auto block leading-relaxed resize-none outline-none border border-[var(--color-parchment-darker)] rounded-lg p-4"
+              class="w-full mx-auto block leading-relaxed resize-none outline-none border border-[var(--color-parchment-darker)] rounded-lg p-4 !bg-[#131417]"
               :style="{
                 fontSize: fontSize + 'px',
-                color: 'var(--color-ink)',
+                color: '#d4d4d8',
                 maxWidth: '720px',
                 fontFamily: 'var(--font-serif)',
-                lineHeight: '1.8',
+                lineHeight: '1.85',
                 minHeight: '60vh',
               }"
             />
@@ -343,10 +343,10 @@ watch(() => projectStore.filepath, loadChapterList)
               class="mx-auto leading-relaxed whitespace-pre-wrap"
               :style="{
                 fontSize: fontSize + 'px',
-                color: 'var(--color-ink)',
+                color: '#d4d4d8',
                 maxWidth: '680px',
                 fontFamily: 'var(--font-serif)',
-                lineHeight: '1.8',
+                lineHeight: '1.85',
               }"
             >
               {{ currentContent }}
@@ -364,8 +364,7 @@ watch(() => projectStore.filepath, loadChapterList)
             <div v-else class="mx-auto space-y-8" style="max-width: 680px">
               <div v-for="item in allContents" :key="item.num">
                 <h3
-                  class="text-lg font-bold mb-4 pb-2 border-b border-[var(--color-parchment-darker)]"
-                  style="color: var(--color-leather)"
+                  class="text-lg font-bold mb-4 pb-2 border-b border-[var(--color-parchment-darker)] text-zinc-100"
                 >
                   第 {{ item.num }} 章
                 </h3>
@@ -373,9 +372,9 @@ watch(() => projectStore.filepath, loadChapterList)
                   class="leading-relaxed whitespace-pre-wrap"
                   :style="{
                     fontSize: fontSize + 'px',
-                    color: 'var(--color-ink)',
+                    color: '#d4d4d8',
                     fontFamily: 'var(--font-serif)',
-                    lineHeight: '1.8',
+                    lineHeight: '1.85',
                   }"
                 >
                   {{ item.content }}

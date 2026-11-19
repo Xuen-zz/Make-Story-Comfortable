@@ -1,0 +1,73 @@
+{
+  "name": "novelflow-studio",
+  "productName": "NovelFlow Studio",
+  "version": "2.1.0",
+  "description": "ComfyUI-style Visual Node-Based AI Novel Studio (Desktop Edition)",
+  "main": "main.js",
+  "author": "NovelFlow Studio",
+  "license": "MIT",
+  "repository": "github:Xuen-zz/Make-Story-Comfortable",
+  "scripts": {
+    "dev": "electron .",
+    "pack:dir": "electron-builder --dir",
+    "build:win": "electron-builder --win --x64 --publish never",
+    "publish:win": "electron-builder --win --x64 --publish always"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "electron": "^35.1.5",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.novelflow.studio",
+    "productName": "NovelFlow Studio",
+    "copyright": "Copyright © 2026 NovelFlow Studio",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "assets/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/backend",
+        "to": "backend",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "artifactName": "NovelFlow-Studio-Setup-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "NovelFlow Studio"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Xuen-zz",
+        "repo": "Make-Story-Comfortable",
+        "releaseType": "release"
+      }
+    ]
+  }
+}

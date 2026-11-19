@@ -1,0 +1,67 @@
+name: Build & Release NovelFlow Studio (Windows)
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies & PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pillow
+
+      - name: Build Frontend (Vite + Vue 3)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Bundle Python Engine (PyInstaller)
+        run: |
+          python -m PyInstaller --noconfirm --clean novelflow_backend.spec
+          New-Item -ItemType Directory -Force -Path desktop/resources/backend | Out-Null
+          Copy-Item -Recurse -Force dist/novelflow-engine/* desktop/resources/backend/
+
+      - name: Build Electron Windows Installer & Publish Release
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npm ci
+          if ("${{ github.ref }}" -like "refs/tags/v*") {
+            npx electron-builder --win --x64 --publish always
+          } else {
+            npx electron-builder --win --x64 --publish never
+          }
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NovelFlow-Studio-Windows-Installer
+          path: |
+            desktop/release/*.exe
+            desktop/release/*.yml
+            desktop/release/*.blockmap

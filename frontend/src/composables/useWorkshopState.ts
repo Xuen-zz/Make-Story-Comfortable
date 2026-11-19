@@ -17,6 +17,18 @@ export const mkState = (): StepState => ({
   running: false, progress: '', result: '', error: '', progressValue: undefined, sseHandle: null,
 })
 
+export interface PipelineStageInfo {
+  id: number
+  name: string
+  subtitle: string
+  icon: string
+  status: 'idle' | 'running' | 'completed' | 'retrying' | 'error'
+  progress: number
+  targetProgress?: number
+  message?: string
+  badge?: string
+}
+
 export function useWorkshopState() {
   const projectStore = useProjectStore()
   const configStore = useConfigStore()
@@ -29,8 +41,8 @@ export function useWorkshopState() {
   // ── 小说参数 ──────────────────────────────────────────────────────────────
   const topic = ref('')
   const genre = ref('玄幻')
-  const numChapters = ref(10)
-  const wordNumber = ref(3000)
+  const numChapters = ref(200)
+  const wordNumber = ref(2500)
   const userGuidance = ref('')
   const xpType = ref('')
   const xpSelectedPresets = ref<string[]>([])
@@ -52,7 +64,7 @@ export function useWorkshopState() {
   const detailedOutline = ref(mkState())
   const outlineText = ref('')
   const outlineBatchStart = ref(1)
-  const outlineBatchSize = ref(5)
+  const outlineBatchSize = ref(10)
   const outlineMode = ref('concise')  // concise / detailed
   const outlineBatchResult = ref('')
   const outlineBatchBackup = ref('')
@@ -233,6 +245,7 @@ export function useWorkshopState() {
     await Promise.all([configStore.loadAll(), generateStore.loadStatus()])
     arch.value.result = generateStore.architectureContent
     bp.value.result = generateStore.blueprintContent
+    autoFillChapterParams(chapterNum.value || 1)
     characterDynamicsContent.value = generateStore.characterDynamicsContent
     // 从独立文件填充步骤字段（优先于项目数据中的缓存值）
     if (generateStore.coreSeedContent) seedText.value = generateStore.coreSeedContent
@@ -244,8 +257,8 @@ export function useWorkshopState() {
       const p = projectStore.activeProjectData
       topic.value = p.topic ?? ''
       genre.value = p.genre ?? '玄幻'
-      numChapters.value = p.num_chapters ?? 10
-      wordNumber.value = p.word_number ?? 3000
+      numChapters.value = p.num_chapters ?? 200
+      wordNumber.value = p.word_number ?? 2500
       userGuidance.value = p.user_guidance ?? ''
       xpType.value = p.xp_type ?? ''
       xpSelectedPresets.value = p.xp_selected_presets ?? []
@@ -274,6 +287,8 @@ export function useWorkshopState() {
     const p = projectStore.activeProjectData
     if (p?.llm_config_name && configStore.llmChoices.includes(p.llm_config_name)) {
       llmConfig.value = p.llm_config_name
+    } else if (configStore.llmChoices.includes('Gemini 3.8 Flash (内置免密)')) {
+      llmConfig.value = 'Gemini 3.8 Flash (内置免密)'
     } else if (configStore.llmChoices.length) {
       llmConfig.value = configStore.llmChoices[0]
     }
@@ -282,6 +297,13 @@ export function useWorkshopState() {
     } else if (configStore.embeddingChoices.length) {
       embConfig.value = configStore.embeddingChoices[0]
     }
+
+    // 自动加载全书章节细纲、草稿与章节列表
+    await loadOutlineText()
+    await loadExistingChapters()
+    await loadChapterDraft(chapterNum.value || 1)
+    await loadChapterEn(chapterNum.value || 1)
+    await loadChapterArtifacts(chapterNum.value || 1)
   })
 
   // ── 加载/重载项目内容 ─────────────────────────────────────────────────────
@@ -293,8 +315,8 @@ export function useWorkshopState() {
       if (p) {
         topic.value = p.topic ?? ''
         genre.value = p.genre ?? '玄幻'
-        numChapters.value = p.num_chapters ?? 10
-        wordNumber.value = p.word_number ?? 3000
+        numChapters.value = p.num_chapters ?? 200
+        wordNumber.value = p.word_number ?? 2500
         userGuidance.value = p.user_guidance ?? ''
         xpType.value = p.xp_type ?? ''
         xpSelectedPresets.value = p.xp_selected_presets ?? []
@@ -340,6 +362,15 @@ export function useWorkshopState() {
       if (generateStore.worldBuildingContent) worldText.value = generateStore.worldBuildingContent
       if (generateStore.plotArchitectureContent) plotText.value = generateStore.plotArchitectureContent
       if (generateStore.characterStateContent) charStateText.value = generateStore.characterStateContent
+      // 从独立文件加载章节细纲
+      await loadOutlineText()
+      // 联动抽取当前章节细纲
+      extractChapterToEdit(chapterNum.value)
+      // 加载章节草稿列表与当前草稿、译文
+      await loadExistingChapters()
+      await loadChapterDraft(chapterNum.value)
+      await loadChapterEn(chapterNum.value)
+      await loadDirectoryEn()
     } finally {
       reloading.value = false
     }
@@ -486,11 +517,42 @@ export function useWorkshopState() {
     setTimeout(() => { saveMsg.value = '' }, 3000)
   }
 
+  const existingChapters = ref<{ num: number; has_draft: boolean; has_final: boolean }[]>([])
+
+  async function loadExistingChapters() {
+    try {
+      const res = await generateApi.chapters(filepath.value)
+      existingChapters.value = res.data.chapters || []
+    } catch {
+      existingChapters.value = []
+    }
+  }
+
+  async function loadChapterDraft(num?: number) {
+    const target = num ?? chapterNum.value
+    if (!target) return null
+    chapter.value.error = ''
+    try {
+      const res = await generateApi.getChapter(target, filepath.value)
+      if (res.data && res.data.content) {
+        chapter.value.result = res.data.content
+        return res.data.content
+      } else {
+        chapter.value.result = ''
+      }
+    } catch {
+      // 本地无文件，彻底清空，绝不残留
+      chapter.value.result = ''
+    }
+    return null
+  }
+
   async function saveChapter() {
     if (!chapter.value.result) return
     try {
       await generateApi.saveChapter(chapterNum.value, chapter.value.result, filepath.value)
       saveMsg.value = `✅ 第 ${chapterNum.value} 章已保存`
+      await loadExistingChapters()
     } catch (e: unknown) { saveMsg.value = `❌ ${(e as Error).message}` }
     setTimeout(() => { saveMsg.value = '' }, 3000)
   }
@@ -642,8 +704,12 @@ export function useWorkshopState() {
         plot_text: plotText.value,
       })
       arch.value.result = res.data.content
+      saveMsg.value = '✅ 完整架构已成功组装并保存至 Novel_architecture.txt！'
+      setTimeout(() => { saveMsg.value = '' }, 4000)
     } catch (e: unknown) {
       arch.value.error = (e as Error).message
+      saveMsg.value = `❌ 组装失败: ${(e as Error).message}`
+      setTimeout(() => { saveMsg.value = '' }, 4000)
     }
   }
 
@@ -680,7 +746,7 @@ export function useWorkshopState() {
       (content) => {
         outlineBatchResult.value = content || outlineBatchResult.value
         loadOutlineText()
-        outlineBatchStart.value = end + 1
+        loadExistingChapters()
       },
       (err) => { s.error = err; s.running = false },
       () => { s.running = false },
@@ -692,6 +758,9 @@ export function useWorkshopState() {
     try {
       const res = await generateApi.getDetailedOutline(filepath.value)
       outlineText.value = res.data.content || ''
+      if (outlineText.value) {
+        extractChapterToEdit(chapterNum.value || 1)
+      }
     } catch { /* ignore */ }
   }
 
@@ -739,6 +808,30 @@ export function useWorkshopState() {
     setTimeout(() => { saveMsg.value = '' }, 3000)
   }
 
+  async function saveSingleChapterOutline(targetChNum: number, singleContent: string) {
+    try {
+      await loadOutlineText()
+      const cleanBlock = singleContent.trim()
+      const normalized = cleanBlock.startsWith('【第')
+        ? cleanBlock
+        : `【第${targetChNum}章细纲】\n${cleanBlock}`
+      let fullText = outlineText.value || ''
+      const existRe = new RegExp(`【第\\s*${targetChNum}\\s*章细纲】[\\s\\S]*?(?=【第\\s*\\d+\\s*章细纲】|$)`)
+      if (existRe.test(fullText)) {
+        fullText = fullText.replace(existRe, normalized + '\n\n')
+      } else {
+        fullText = fullText.trim() ? fullText.trim() + '\n\n' + normalized : normalized
+      }
+      outlineText.value = fullText.trim()
+      await generateApi.saveDetailedOutline(outlineText.value, filepath.value)
+      await loadExistingChapters()
+      saveMsg.value = `✅ 第 ${targetChNum} 章细纲已保存`
+    } catch (e: unknown) {
+      saveMsg.value = `❌ ${(e as Error).message}`
+    }
+    setTimeout(() => { saveMsg.value = '' }, 3000)
+  }
+
   function extractChapterToEdit(chapterNum: number) {
     if (!outlineText.value || chapterNum < 1) return
     const re = new RegExp(`(【第\\s*${chapterNum}\\s*章细纲】[\\s\\S]*?)(?=【第\\s*\\d+\\s*章细纲】|$)`)
@@ -749,6 +842,13 @@ export function useWorkshopState() {
       outlineBatchResult.value = ''
     }
   }
+
+  const currentChapterOutline = computed(() => {
+    if (!outlineText.value || chapterNum.value < 1) return ''
+    const re = new RegExp(`(【第\\s*${chapterNum.value}\\s*章细纲】[\\s\\S]*?)(?=【第\\s*\\d+\\s*章细纲】|$)`)
+    const m = outlineText.value.match(re)
+    return (m && m[1]) ? m[1].trim() : ''
+  })
 
   function revertOutlineBatch() {
     if (!outlineBatchBackup.value) return
@@ -771,6 +871,680 @@ export function useWorkshopState() {
       include_world_building: revisionContext.value.include_world_building,
       include_plot: revisionContext.value.include_plot,
     })
+  }
+
+  // ── 全链路自动生成与生产控制舱 (End-to-End Pipeline Cockpit) ──
+  interface PipelineStageInfo {
+    id: number
+    name: string
+    subtitle: string
+    icon: string
+    status: 'idle' | 'running' | 'completed' | 'retrying' | 'error'
+    progress: number
+    targetProgress?: number
+    message?: string
+    badge?: string
+  }
+
+  // ── 工坊双界面视图切换：'pipeline' (🏭 全自动生产中枢) vs 'step' (✍️ 步进精修工坊) ──
+  const initialViewMode = ((typeof window !== 'undefined' && localStorage.getItem('novel_workshop_view_mode')) as ('all' | 'pipeline' | 'step')) || 'all'
+  const workshopViewMode = ref<'all' | 'pipeline' | 'step'>(initialViewMode)
+
+  // ── 因果连续性与幕间交接（Semantic Handoff & Continuity Engine） ──
+  const handoffData = ref<any>(null)
+  const handoffLoading = ref(false)
+  const coldStartLoading = ref(false)
+  const coldStartResult = ref<any>(null)
+  const preWriteGateLoading = ref(false)
+  const preWriteGateResult = ref<any>(null)
+  const spanRepairLoading = ref(false)
+  const spanRepairTarget = ref('')
+  const spanRepairInstruction = ref('')
+  const spanRepairResult = ref<any>(null)
+
+  // ── 小说流水线底层规则与固定写法表 ──
+  const adultMode = ref(false)
+  const fixedTermsContent = ref('')
+  const fixedTermsLoading = ref(false)
+
+  function setWorkshopViewMode(mode: 'all' | 'pipeline' | 'step') {
+    workshopViewMode.value = mode
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('novel_workshop_view_mode', mode)
+    }
+  }
+
+  const pipelineOpen = ref(false)
+  const pipelineRunning = ref(false)
+  const pipelineElapsed = ref(0)
+  let pipelineTimer: ReturnType<typeof setInterval> | null = null
+  let pipelineTicker: ReturnType<typeof setInterval> | null = null
+  const pipelineActiveTab = ref<'terminal' | 'draft' | 'polish' | 'polishChecklist' | 'translation' | 'audit' | 'archive' | 'continuity'>('terminal')
+  const pipelineAutoRetry = ref(true)
+  const pipelineStatusMsg = ref('')
+  const pipelineProgressVal = ref(0)
+  const pipelineCurrentStageId = ref(1)
+  const pipelineTargetChapter = ref<number | null>(null)
+
+  // 跨章快速查阅器（流水线生产期间允许独立查阅/比对其他章节内容，互不干扰）
+  const whitepaperModalOpen = ref(false)
+  function openWhitepaperModal() {
+    whitepaperModalOpen.value = true
+  }
+  function closeWhitepaperModal() {
+    whitepaperModalOpen.value = false
+  }
+
+  const quickReaderOpen = ref(false)
+  const quickReaderChapter = ref(1)
+
+  function openQuickReader(targetChapter?: number) {
+    if (targetChapter && targetChapter >= 1) {
+      quickReaderChapter.value = targetChapter
+    } else {
+      quickReaderChapter.value = chapterNum.value > 1 ? chapterNum.value - 1 : 1
+    }
+    quickReaderOpen.value = true
+  }
+
+  function closeQuickReader() {
+    quickReaderOpen.value = false
+  }
+
+  // 6 阶段全局权重: Stage 1 (10%), Stage 2 (35%), Stage 3 (20%), Stage 4 (20%), Stage 5 (10%), Stage 6 (5%)
+  const STAGE_WEIGHTS = [0.10, 0.35, 0.20, 0.20, 0.10, 0.05]
+
+  function stopPipelineTimers() {
+    if (pipelineTimer) {
+      clearInterval(pipelineTimer)
+      pipelineTimer = null
+    }
+    if (pipelineTicker) {
+      clearInterval(pipelineTicker)
+      pipelineTicker = null
+    }
+  }
+
+  const savedPipelineMode = (typeof localStorage !== 'undefined' ? localStorage.getItem('novel_pipeline_mode') : null) as 'fast_zh' | 'bilingual' | null
+  const pipelineMode = ref<'fast_zh' | 'bilingual'>(savedPipelineMode === 'bilingual' ? 'bilingual' : 'fast_zh')
+  const pipelineAutoAdvance = ref(false)
+  const savedReviewStrength = (typeof localStorage !== 'undefined' ? localStorage.getItem('novel_review_strength') : null) as 'strong' | 'light' | null
+  const pipelineReviewStrength = ref<'strong' | 'light'>(savedReviewStrength === 'light' ? 'light' : 'strong')
+  function setReviewStrength(val: 'strong' | 'light') {
+    pipelineReviewStrength.value = val
+    if (typeof localStorage !== 'undefined') localStorage.setItem('novel_review_strength', val)
+  }
+  const pipelineContextToggles = ref({
+    summary: true,
+    charState: true,
+    worldBuilding: true,
+    canon: true,
+  })
+  const batchQueueRunning = ref(false)
+  const batchQueuePaused = ref(false)
+  const batchQueueStopRequested = ref(false)
+  const batchQueueStart = ref(1)
+  const batchQueueEnd = ref(10)
+  const batchQueueCurrent = ref(0)
+  const batchQueueStatusMap = ref<Record<number, 'pending' | 'running' | 'completed' | 'error' | 'skipped'>>({})
+
+  // 零大纲极速孵化状态
+  const fastIncubating = ref(false)
+  const fastIncubateProgress = ref('')
+
+  function setPipelineMode(mode: 'fast_zh' | 'bilingual') {
+    pipelineMode.value = mode
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('novel_pipeline_mode', mode)
+    }
+    if (mode === 'fast_zh' && (pipelineActiveTab.value === 'translation' || pipelineActiveTab.value === 'audit')) {
+      pipelineActiveTab.value = 'terminal'
+    }
+    pipelineStages.value = defaultPipelineStages()
+  }
+
+  const defaultPipelineStages = (): PipelineStageInfo[] => {
+    if (pipelineMode.value === 'fast_zh') {
+      return [
+        { id: 1, name: '细纲与因果交接装配', subtitle: '装配上章交接契约(Handoff)、开篇禁令与正史设定', icon: '🔗', status: 'idle', progress: 0, targetProgress: 0 },
+        { id: 2, name: '中文分场景起草', subtitle: '分场景起草，直写情绪与动作指纹 (Gemini 3.8 Flash Low)', icon: '✍️', status: 'idle', progress: 0, targetProgress: 0 },
+        { id: 3, name: 'AI 总编审校润色', subtitle: 'Gemini 4 Hydrogen (Medium) 去套话审校与节奏精修', icon: '🛡️', status: 'idle', progress: 0, targetProgress: 0 },
+        { id: 4, name: '正史演进与交接归档', subtitle: '提炼下章交接契约(Handoff)、演进正史页与全书记忆', icon: '📜', status: 'idle', progress: 0, targetProgress: 0 },
+      ]
+    }
+    return [
+      { id: 1, name: '细纲与因果交接装配', subtitle: '装配上章交接契约(Handoff)、开篇禁令与正史设定', icon: '🔗', status: 'idle', progress: 0, targetProgress: 0 },
+      { id: 2, name: '中文分场景起草', subtitle: '分场景起草，直写情绪与动作指纹 (Gemini 3.8 Flash Low)', icon: '✍️', status: 'idle', progress: 0, targetProgress: 0 },
+      { id: 3, name: 'AI 总编审校润色', subtitle: 'Gemini 4 Hydrogen (Medium) 去套话审校与节奏精修', icon: '🛡️', status: 'idle', progress: 0, targetProgress: 0 },
+      { id: 4, name: '出海美式英文译制', subtitle: '高忠实度、纯正母语、第八大去AI翻译铁律', icon: '🇺🇸', status: 'idle', progress: 0, targetProgress: 0 },
+      { id: 5, name: '双语质检审校', subtitle: '双语对照严格质检 (Gemini 4 Hydrogen Medium)', icon: '🛡️', status: 'idle', progress: 0, targetProgress: 0 },
+      { id: 6, name: '正史演进与交接归档', subtitle: '提炼下章交接契约(Handoff)、演进正史页与全书记忆', icon: '📜', status: 'idle', progress: 0, targetProgress: 0 },
+    ]
+  }
+
+  const pipelineStages = ref<PipelineStageInfo[]>(defaultPipelineStages())
+
+  const pipelineTerminalLogs = ref<string[]>([])
+  const pipelineData = ref({
+    draft: '',
+    polished: '',
+    checklist: '',
+    zhuque: null as any,
+    translation: '',
+    audit: '',
+    auditPass: false,
+    retryOccurred: false,
+    enZhuque: null as any,
+    summary: '',
+    characterState: '',
+    canonHistory: '',
+    message: '',
+  })
+
+  let pipelineHandle: SSEHandle | null = null
+
+  async function doFastIncubateBook(customTopic?: string, customGenre?: string, customGuidance?: string) {
+    if (fastIncubating.value) return
+    if (customTopic) topic.value = customTopic
+    if (customGenre) genre.value = customGenre
+    if (customGuidance) userGuidance.value = customGuidance
+
+    const currentTopic = topic.value.trim()
+    if (!currentTopic) {
+      alert('请先输入故事核心脑洞或一句话主题！')
+      return
+    }
+
+    fastIncubating.value = true
+    fastIncubateProgress.value = '正在基于雪花写作法推演全书架构（核心种子、人物动力学、世界观、剧情骨架）...'
+
+    // 保存基本配置到 project_config.json
+    try {
+      await projectStore.saveProject({
+        topic: topic.value,
+        genre: genre.value,
+        num_chapters: numChapters.value,
+        word_number: wordNumber.value,
+        user_guidance: userGuidance.value,
+      })
+    } catch {
+      // ignore
+    }
+
+    // 1. 生成架构
+    const archSuccess = await new Promise<boolean>((resolve) => {
+      const s = arch.value
+      s.running = true; s.progress = ''; s.result = ''; s.error = ''
+      postSSE(
+        '/generate/architecture',
+        {
+          llm_config_name: llmConfig.value,
+          topic: topic.value,
+          genre: genre.value,
+          num_chapters: numChapters.value || 200,
+          word_number: wordNumber.value || 2500,
+          filepath: filepath.value,
+          user_guidance: userGuidance.value,
+          arch_style_name: archStyle.value === '不使用文风' ? null : archStyle.value || null,
+          xp_type: xpType.value,
+          num_characters: numCharacters.value || '3-6',
+        },
+        (msg) => {
+          s.progress = msg
+          fastIncubateProgress.value = `[架构推演中] ${msg}`
+        },
+        (content) => {
+          if (typeof content === 'string' && (content.startsWith('❌') || content.includes('生成失败') || content.includes('不存在或为空'))) {
+            s.error = content
+            fastIncubateProgress.value = `❌ 架构推演未成功: ${content}`
+            return
+          }
+          try {
+            const data = JSON.parse(content)
+            seedText.value = data.core_seed ?? ''
+            charText.value = data.character_dynamics ?? ''
+            worldText.value = data.world_building ?? ''
+            plotText.value = data.plot_architecture ?? ''
+            charStateText.value = data.character_state ?? ''
+            s.result = data.assembled ?? content
+          } catch {
+            s.result = content
+          }
+        },
+        (err) => {
+          s.error = err
+          fastIncubateProgress.value = `❌ 架构生成失败: ${err}`
+          resolve(false)
+        },
+        () => {
+          s.running = false
+          resolve(!s.error)
+        }
+      )
+    })
+
+    if (!archSuccess) {
+      fastIncubating.value = false
+      alert(`架构孵化未完成: ${arch.value.error || arch.value.result || '模型未返回有效架构，请检查大模型配置或网络连接'}`)
+      return
+    }
+
+    // 2. 生成章节蓝图
+    fastIncubateProgress.value = '全书架构已推演就绪，正在生成章节大纲蓝图 (Novel_directory.txt)...'
+    const bpSuccess = await new Promise<boolean>((resolve) => {
+      const s = bp.value
+      s.running = true; s.progress = ''; s.result = ''; s.error = ''
+      postSSE(
+        '/generate/blueprint',
+        {
+          llm_config_name: llmConfig.value,
+          filepath: filepath.value,
+          num_chapters: numChapters.value || 200,
+          user_guidance: userGuidance.value,
+          bp_style_name: bpStyle.value === '不使用文风' ? null : bpStyle.value || null,
+          xp_type: xpType.value,
+        },
+        (msg) => {
+          s.progress = msg
+          fastIncubateProgress.value = `[蓝图推演中] ${msg}`
+        },
+        (content) => {
+          if (typeof content === 'string' && (content.startsWith('❌') || content.includes('生成失败') || content.includes('未找到') || content.includes('不存在或为空'))) {
+            s.error = content
+            fastIncubateProgress.value = `❌ 蓝图推演未成功: ${content}`
+            return
+          }
+          s.result = content
+        },
+        (err) => {
+          s.error = err
+          fastIncubateProgress.value = `❌ 蓝图生成失败: ${err}`
+          resolve(false)
+        },
+        () => {
+          s.running = false
+          resolve(!s.error)
+        }
+      )
+    })
+
+    fastIncubating.value = false
+    if (bpSuccess) {
+      fastIncubateProgress.value = '🎉 架构与蓝图已全部就绪！全自动流水线已解锁，已装配第 1 章！'
+      await reloadProjectContent()
+      autoFillChapterParams(1, true)
+      alert('🎉 全书雪花架构与大纲蓝图已全自动孵化就绪！\n已自动为您装填第1章创作参数与剧情走向，直接点击【全自动流水线生产】即可一键开写！')
+    } else {
+      alert(`蓝图孵化未完成: ${bp.value.error || bp.value.result || '大纲蓝图生成失败，请检查大模型配置'}`)
+    }
+  }
+
+  function openPipelineControlRoom(num?: number) {
+    if (num !== undefined && num !== chapterNum.value) {
+      selectChapter(num)
+    }
+    autoFillChapterParams(chapterNum.value, false)
+    loadHandoff(chapterNum.value > 1 ? chapterNum.value - 1 : 1)
+    pipelineOpen.value = true
+  }
+
+  function closePipelineControlRoom() {
+    if (pipelineRunning.value) {
+      const ok = window.confirm('生产流水线正在运行中，关闭窗口流水线仍会在后台执行，确定关闭窗口？')
+      if (!ok) return
+    }
+    pipelineOpen.value = false
+  }
+
+  let pipelineResolver: ((ok: boolean) => void) | null = null
+
+  function cancelPipeline() {
+    if (pipelineHandle) {
+      pipelineHandle.abort()
+      pipelineHandle = null
+    }
+    pipelineRunning.value = false
+    pipelineTargetChapter.value = null
+    stopPipelineTimers()
+    pipelineStatusMsg.value = '🛑 用户已手动终止生产流水线'
+    pipelineTerminalLogs.value.push(`[${new Date().toLocaleTimeString()}] 🛑 流水线已手动终止。`)
+    if (pipelineResolver) {
+      const r = pipelineResolver
+      pipelineResolver = null
+      r(false)
+    }
+  }
+
+  function doRunPipeline(targetChapter?: number): Promise<boolean> {
+    if (pipelineRunning.value) return Promise.resolve(false)
+    if (typeof targetChapter === 'number' && targetChapter >= 1) {
+      chapterNum.value = targetChapter
+    }
+    // 安全填充：绝不冲掉用户已在界面填入的导演指令与定制参数
+    autoFillChapterParams(chapterNum.value, false)
+
+    return new Promise<boolean>((resolve) => {
+      pipelineResolver = resolve
+      pipelineRunning.value = true
+    pipelineElapsed.value = 0
+    stopPipelineTimers()
+
+    pipelineTimer = setInterval(() => {
+      pipelineElapsed.value++
+    }, 1000)
+
+    pipelineStages.value = defaultPipelineStages()
+    const isZhOnly = pipelineMode.value === 'fast_zh'
+    pipelineTerminalLogs.value = [
+      `[${new Date().toLocaleTimeString()}] 🚀 启动第 ${chapterNum.value} 章${isZhOnly ? '中文出稿' : '出海双语'}生产流水线...`,
+      isZhOnly
+        ? `[${new Date().toLocaleTimeString()}] 🎯 预设参数: 模式=纯中文4步, 目标字数=${wordNumber.value}`
+        : `[${new Date().toLocaleTimeString()}] 🎯 预设参数: 模式=出海双语6步, 目标字数=${wordNumber.value}, 译制标准=${translateStyle.value}, 智能重试=${pipelineAutoRetry.value ? '开启' : '关闭'}`
+    ]
+    pipelineData.value = {
+      draft: '',
+      polished: '',
+      checklist: '',
+    zhuque: null as any,
+      translation: '',
+      audit: '',
+      auditPass: false,
+      retryOccurred: false,
+      enZhuque: null as any,
+      summary: '',
+      characterState: '',
+      canonHistory: '',
+      message: '',
+    }
+    pipelineProgressVal.value = 0
+    pipelineCurrentStageId.value = 1
+    pipelineTargetChapter.value = chapterNum.value
+    pipelineStatusMsg.value = '正在装配细纲与参数...'
+
+    // 渐进式平滑推进定时器（动态自适应：快时平滑追赶，慢时渐近减速趋近 90%）
+    pipelineTicker = setInterval(() => {
+      if (!pipelineRunning.value) return
+
+      let weightedSum = 0
+      pipelineStages.value.forEach((stage, idx) => {
+        if (stage.status === 'completed') {
+          stage.progress = 100
+        } else if (stage.status === 'running' || stage.status === 'retrying') {
+          const target = stage.targetProgress || 15
+          if (stage.progress < target) {
+            // 后端有进度或处于初始阶段时，快速平滑追赶
+            const step = Math.max(0.8, (target - stage.progress) * 0.3)
+            stage.progress = Math.min(target, Math.round((stage.progress + step) * 10) / 10)
+          } else if (stage.progress < 92) {
+            // 等待后端长耗时操作时，渐近式平滑减速，最多爬升至 92%，绝不假死亦不过冲
+            const delta = (93 - stage.progress) * 0.02 + 0.08
+            stage.progress = Math.min(92, Math.round((stage.progress + delta) * 10) / 10)
+          }
+        } else if (stage.status === 'idle') {
+          stage.progress = 0
+        }
+        weightedSum += (stage.progress || 0) * (STAGE_WEIGHTS[idx] || 0.1)
+      })
+
+      // 平滑更新全局进度
+      const targetVal = weightedSum / 100
+      if (targetVal > pipelineProgressVal.value) {
+        pipelineProgressVal.value = Math.min(1.0, Math.round(targetVal * 1000) / 1000)
+      }
+    }, 300)
+
+    const payload = {
+      llm_config_name: llmConfig.value,
+      emb_config_name: embConfig.value || '',
+      filepath: filepath.value,
+      chapter_num: chapterNum.value,
+      word_number: wordNumber.value,
+      user_guidance: chGuidance.value || userGuidance.value,
+      characters_involved: charactersInvolved.value,
+      key_items: keyItems.value,
+      scene_location: sceneLocation.value,
+      time_constraint: timeConstraint.value,
+      style_name: chStyle.value === '不使用文风' ? '' : chStyle.value || '',
+      narrative_style_name: chNarrativeStyle.value === '不使用文风' ? '' : chNarrativeStyle.value || '',
+      xp_type: xpType.value,
+      target_style: translateStyle.value,
+      auto_retry_translation: pipelineAutoRetry.value,
+      scene_by_scene: sceneByScene.value,
+      adult_mode: adultMode.value,
+      pipeline_mode: pipelineMode.value,
+      review_strength: pipelineReviewStrength.value,
+      inject_world_building: pipelineContextToggles.value.worldBuilding,
+      inject_summary: pipelineContextToggles.value.summary,
+      inject_char_state: pipelineContextToggles.value.charState,
+      inject_canon: pipelineContextToggles.value.canon,
+    }
+
+    pipelineHandle = postSSE(
+      '/generate/pipeline_chapter',
+      payload,
+      (msg, val, content) => {
+        if (msg) {
+          pipelineStatusMsg.value = msg
+          pipelineTerminalLogs.value.push(`[${new Date().toLocaleTimeString()}] ${msg}`)
+        }
+        if (val !== undefined && val > pipelineProgressVal.value) {
+          pipelineProgressVal.value = val
+        }
+        if (content) {
+          try {
+            const ev = JSON.parse(content)
+            if (ev.pipeline_event === 'stage_update') {
+              const stageIdx = ev.stage
+              const st = pipelineStages.value.find(s => s.id === stageIdx)
+              if (st) {
+                st.status = ev.status
+                if (ev.message) st.message = ev.message
+                if (ev.stage_progress !== undefined) {
+                  st.targetProgress = Math.round(ev.stage_progress * 100)
+                  if (st.status === 'running' && st.progress < st.targetProgress) {
+                    st.progress = Math.max(st.progress, Math.min(st.targetProgress, st.progress + 6))
+                  }
+                }
+                if (ev.status === 'completed') {
+                  st.progress = 100
+                  st.targetProgress = 100
+                }
+                if (ev.status === 'running') {
+                  pipelineCurrentStageId.value = stageIdx
+                  if (st.progress < 10) st.progress = 10
+                }
+              }
+              if (ev.payload) {
+                const p = ev.payload
+                if (p.draft) {
+                  pipelineData.value.draft = p.draft
+                  chapter.value.result = p.draft
+                }
+                if (p.polished) {
+                  pipelineData.value.polished = p.polished
+                  expandNew.value = p.polished
+                  chapter.value.result = p.polished
+                }
+                if (p.checklist) {
+                  pipelineData.value.checklist = p.checklist
+                }
+                if (p.zhuque) {
+                  pipelineData.value.zhuque = p.zhuque
+                }
+                if (p.translation) {
+                  pipelineData.value.translation = p.translation
+                  translateResult.value = p.translation
+                }
+                if (p.audit) {
+                  pipelineData.value.audit = p.audit
+                  auditState.value.result = p.audit
+                  pipelineData.value.auditPass = Boolean(p.audit_pass)
+                  pipelineData.value.retryOccurred = Boolean(p.retry_occurred)
+                }
+                if (p.en_zhuque) {
+                  pipelineData.value.enZhuque = p.en_zhuque
+                }
+                if (p.summary) {
+                  pipelineData.value.summary = p.summary
+                }
+                if (p.character_state) {
+                  pipelineData.value.characterState = p.character_state
+                }
+                if (p.canon_history) {
+                  pipelineData.value.canonHistory = p.canon_history
+                }
+                if (p.handoff) {
+                  handoffData.value = p.handoff
+                }
+              }
+            }
+          } catch {
+            // ignore JSON parse error
+          }
+        }
+      },
+      (content) => {
+        if (content) {
+          try {
+            const res = JSON.parse(content)
+            if (res.success) {
+              if (res.draft) pipelineData.value.draft = res.draft
+              if (res.polished) {
+                pipelineData.value.polished = res.polished
+                chapter.value.result = res.polished
+                expandNew.value = res.polished
+              }
+              if (res.checklist) pipelineData.value.checklist = res.checklist
+              if (res.translation) {
+                pipelineData.value.translation = res.translation
+                translateResult.value = res.translation
+              }
+              if (res.audit) {
+                pipelineData.value.audit = res.audit
+                auditState.value.result = res.audit
+                pipelineData.value.auditPass = Boolean(res.audit_pass)
+                pipelineData.value.retryOccurred = Boolean(res.retry_occurred)
+              }
+              if (res.en_zhuque) pipelineData.value.enZhuque = res.en_zhuque
+              if (res.summary) pipelineData.value.summary = res.summary
+              if (res.character_state) pipelineData.value.characterState = res.character_state
+              pipelineStatusMsg.value = res.message || '🎉 全链路生产圆满完成！'
+              pipelineStages.value.forEach(s => {
+                s.status = 'completed'
+                s.progress = 100
+                s.targetProgress = 100
+              })
+              pipelineProgressVal.value = 1.0
+              pipelineTerminalLogs.value.push(`[${new Date().toLocaleTimeString()}] ✅ ${pipelineStatusMsg.value}`)
+            } else if (res.error) {
+              pipelineStatusMsg.value = `❌ 生产中断: ${res.error}`
+              if (res.failed_stage) {
+                const s = pipelineStages.value.find(st => st.id === res.failed_stage)
+                if (s) s.status = 'error'
+              }
+              pipelineTerminalLogs.value.push(`[${new Date().toLocaleTimeString()}] ❌ ${pipelineStatusMsg.value}`)
+            }
+          } catch {
+            // text result
+          }
+        }
+      },
+      (err) => {
+        pipelineStatusMsg.value = `❌ 异常: ${err}`
+        pipelineTerminalLogs.value.push(`[${new Date().toLocaleTimeString()}] ❌ ${err}`)
+        pipelineRunning.value = false
+        stopPipelineTimers()
+        if (pipelineResolver) {
+          const r = pipelineResolver
+          pipelineResolver = null
+          r(false)
+        }
+      },
+      () => {
+        pipelineRunning.value = false
+        stopPipelineTimers()
+        pipelineHandle = null
+        if (pipelineMode.value === 'bilingual' && pipelineData.value.translation) {
+          pipelineActiveTab.value = 'translation'
+        } else if (pipelineData.value.polished) {
+          pipelineActiveTab.value = 'polish'
+        }
+        loadHandoff(chapterNum.value)
+        loadExistingChapters()
+        const ok = pipelineStages.value.every(s => s.status === 'completed')
+        if (pipelineAutoAdvance.value && ok && !batchQueueRunning.value) {
+          if (chapterNum.value < numChapters.value) {
+            chapterNum.value++
+            autoFillChapterParams(chapterNum.value, false)
+          }
+        }
+        if (pipelineResolver) {
+          const r = pipelineResolver
+          pipelineResolver = null
+          r(ok)
+        }
+      }
+    )
+    })
+  }
+
+  function togglePauseBatchQueue() {
+    batchQueuePaused.value = !batchQueuePaused.value
+  }
+
+  function stopBatchQueue() {
+    batchQueueStopRequested.value = true
+    batchQueuePaused.value = false
+    if (pipelineRunning.value) {
+      cancelPipeline()
+    }
+    batchQueueRunning.value = false
+  }
+
+  async function doRunBatchQueue(start?: number, end?: number, overwriteCompleted = false) {
+    if (batchQueueRunning.value || pipelineRunning.value) return
+    const s = Math.max(1, start ?? batchQueueStart.value)
+    const e = Math.min(numChapters.value, Math.max(s, end ?? batchQueueEnd.value))
+    batchQueueStart.value = s
+    batchQueueEnd.value = e
+    batchQueueRunning.value = true
+    batchQueuePaused.value = false
+    batchQueueStopRequested.value = false
+
+    const map: Record<number, 'pending' | 'running' | 'completed' | 'error' | 'skipped'> = {}
+    for (let ch = s; ch <= e; ch++) {
+      const exist = existingChapters.value.find(c => c.num === ch)
+      if (!overwriteCompleted && exist?.has_final) {
+        map[ch] = 'skipped'
+      } else {
+        map[ch] = 'pending'
+      }
+    }
+    batchQueueStatusMap.value = map
+
+    for (let ch = s; ch <= e; ch++) {
+      if (batchQueueStopRequested.value) break
+      while (batchQueuePaused.value && !batchQueueStopRequested.value) {
+        await new Promise(r => setTimeout(r, 400))
+      }
+      if (batchQueueStopRequested.value) break
+      if (batchQueueStatusMap.value[ch] === 'skipped') continue
+
+      batchQueueCurrent.value = ch
+      batchQueueStatusMap.value = { ...batchQueueStatusMap.value, [ch]: 'running' }
+      chapterNum.value = ch
+      const ok = await doRunPipeline(ch)
+      batchQueueStatusMap.value = {
+        ...batchQueueStatusMap.value,
+        [ch]: ok ? 'completed' : 'error',
+      }
+      if (!ok && !batchQueueStopRequested.value) {
+        // 出错后暂停队列，等待作者查看或手动处理，不盲目雪崩跑完后面依赖本章记忆的章节
+        batchQueuePaused.value = true
+        break
+      }
+    }
+    batchQueueRunning.value = false
   }
 
   // ── Step 3: 章节 ─────────────────────────────────────────────────────────
@@ -1060,8 +1834,618 @@ export function useWorkshopState() {
     humanizerChapterNum.value = 0
   }
 
+  // ── 出海英文本地化 ──
+  const translateState = ref(mkState())
+  const translateStyle = ref('Alpha Romance (GoodNovel / Dreame 爆款标准)')
+  const translateGuidance = ref('')
+  const translateResult = ref('')
+  const translateSaving = ref(false)
+
+  async function loadChapterEn(num?: number) {
+    const target = num ?? chapterNum.value
+    if (!target) return
+    try {
+      const res = await generateApi.getChapterEn(target, filepath.value)
+      if (res.data && res.data.content) {
+        translateResult.value = res.data.content
+        translateState.value.result = res.data.content
+        pipelineData.value.translation = res.data.content
+        return res.data.content
+      } else {
+        translateResult.value = ''
+        translateState.value.result = ''
+      }
+    } catch {
+      translateResult.value = ''
+      translateState.value.result = ''
+    }
+  }
+
+  async function loadChapterArtifacts(num?: number) {
+    const target = num ?? chapterNum.value
+    if (!target) return
+    try {
+      const res = await generateApi.getChapterArtifacts(target, filepath.value)
+      if (res.data) {
+        const d = res.data
+        // 关键修复 1：每次切换/加载章节时，严格按目标章节实际数据赋值（无则清空，防止旧章节产物残留污染）
+        pipelineData.value.draft = d.draft || ''
+        pipelineData.value.polished = d.polished || ''
+        pipelineData.value.checklist = d.checklist || ''
+        pipelineData.value.translation = d.translation || ''
+        pipelineData.value.audit = ''
+        pipelineData.value.auditPass = Boolean(d.has_en)
+        pipelineData.value.retryOccurred = false
+        pipelineData.value.message = ''
+        if (d.summary) pipelineData.value.summary = d.summary
+        if (d.character_state) pipelineData.value.characterState = d.character_state
+
+        expandNew.value = d.polished || ''
+        chapter.value.result = d.polished || d.draft || ''
+        translateResult.value = d.translation || ''
+        translateState.value.result = d.translation || ''
+
+        // 关键修复 2：根据目标章节的实际生成文件情况，按当前流水线模式精准回显各阶段状态
+        if (!pipelineRunning.value) {
+          const isZhOnly = pipelineMode.value === 'fast_zh'
+          if ((isZhOnly && d.has_polished && Boolean(d.summary)) || (!isZhOnly && d.has_en)) {
+            pipelineStages.value.forEach(s => {
+              s.status = 'completed'
+              s.progress = 100
+              s.targetProgress = 100
+            })
+            pipelineProgressVal.value = 1.0
+            pipelineCurrentStageId.value = isZhOnly ? 4 : 6
+            pipelineStatusMsg.value = `第 ${target} 章产物已就绪（已归档）`
+            pipelineData.value.auditPass = true
+          } else if (d.has_polished) {
+            pipelineStages.value.forEach((s, idx) => {
+              const done = idx <= 2
+              s.status = done ? 'completed' : 'idle'
+              s.progress = done ? 100 : 0
+              s.targetProgress = done ? 100 : 0
+            })
+            pipelineProgressVal.value = isZhOnly ? 0.85 : 0.65
+            pipelineCurrentStageId.value = 4
+            pipelineStatusMsg.value = isZhOnly
+              ? `第 ${target} 章中文审校定稿已就绪`
+              : `第 ${target} 章中文润色已就绪，待出海英译与质检`
+            pipelineData.value.auditPass = false
+          } else if (d.has_draft) {
+            pipelineStages.value.forEach((s, idx) => {
+              const done = idx <= 1
+              s.status = done ? 'completed' : 'idle'
+              s.progress = done ? 100 : 0
+              s.targetProgress = done ? 100 : 0
+            })
+            pipelineProgressVal.value = 0.45
+            pipelineCurrentStageId.value = 3
+            pipelineStatusMsg.value = `第 ${target} 章中文草稿已就绪，待审校润色`
+            pipelineData.value.auditPass = false
+          } else {
+            // 本章尚未生成（如切换到第八章）：彻底重置为 0% 初始待命状态！
+            pipelineStages.value = defaultPipelineStages()
+            pipelineProgressVal.value = 0
+            pipelineCurrentStageId.value = 1
+            pipelineStatusMsg.value = `第 ${target} 章待命中，点击「启动全链路生产」开始`
+            pipelineData.value.auditPass = false
+            pipelineTerminalLogs.value = [
+              `[${new Date().toLocaleTimeString()}] ℹ️ 当前选定第 ${target} 章（尚未生产）。流水线就绪，点击上方按钮开始。`
+            ]
+          }
+        }
+      }
+    } catch {
+      if (!pipelineRunning.value) {
+        pipelineStages.value = defaultPipelineStages()
+        pipelineProgressVal.value = 0
+        pipelineCurrentStageId.value = 1
+        pipelineData.value.draft = ''
+        pipelineData.value.polished = ''
+        pipelineData.value.checklist = ''
+        pipelineData.value.translation = ''
+        pipelineData.value.audit = ''
+        pipelineData.value.auditPass = false
+        pipelineData.value.retryOccurred = false
+        pipelineStatusMsg.value = `第 ${target} 章待命中，点击「启动全链路生产」开始`
+      }
+    }
+  }
+
+  function doTranslateChapter() {
+    const s = translateState.value
+    s.running = true
+    s.progress = '准备翻译...'
+    s.result = ''
+    translateResult.value = ''
+    s.error = ''
+    const handle = postSSE(
+      '/generate/translate',
+      {
+        llm_config_name: llmConfig.value,
+        filepath: filepath.value,
+        chapter_num: chapterNum.value,
+        target_style: translateStyle.value,
+        custom_guidance: translateGuidance.value,
+      },
+      (msg, value) => {
+        s.progress = msg
+        if (value !== undefined) s.progressValue = value
+      },
+      (content) => {
+        s.result = content
+        translateResult.value = content
+      },
+      (err) => {
+        s.error = err
+        s.running = false
+      },
+      () => {
+        s.running = false
+        s.sseHandle = null
+        if (translateResult.value) {
+          saveChapterEn()
+        }
+      },
+    )
+    s.sseHandle = handle
+  }
+
+  async function saveChapterEn() {
+    if (!translateResult.value) return
+    translateSaving.value = true
+    try {
+      await generateApi.saveChapterEn(chapterNum.value, translateResult.value, filepath.value)
+      saveMsg.value = `✅ 第 ${chapterNum.value} 章欧美英文版已保存至 chapters_en/`
+    } catch (e: unknown) {
+      saveMsg.value = `❌ ${(e as Error).message}`
+    } finally {
+      translateSaving.value = false
+    }
+    setTimeout(() => { saveMsg.value = '' }, 4000)
+  }
+
+  // ── 出海英文章名全集 (English Chapter Directory) ──
+  interface ChapterEnDirectoryItem {
+    num: number
+    title_zh: string
+    title_en: string
+    title_en_clean?: string
+    summary?: string
+  }
+
+  const directoryEnChapters = ref<ChapterEnDirectoryItem[]>([])
+  const directoryEnRaw = ref('')
+  const directoryEnLoading = ref(false)
+  const directoryEnSaving = ref(false)
+  const directoryEnState = ref(mkState())
+  const localizationTab = ref<'directory' | 'chapter'>('directory')
+
+  async function loadDirectoryEn() {
+    if (!filepath.value) return
+    directoryEnLoading.value = true
+    try {
+      const res = await generateApi.getDirectoryEn(filepath.value)
+      if (res.data) {
+        directoryEnChapters.value = res.data.chapters || []
+        directoryEnRaw.value = res.data.raw_text || ''
+      }
+    } catch (e: unknown) {
+      console.warn('Failed to load English chapter directory:', e)
+    } finally {
+      directoryEnLoading.value = false
+    }
+  }
+
+  async function saveDirectoryEn(customChapters?: ChapterEnDirectoryItem[], customRaw?: string) {
+    if (!filepath.value) return
+    directoryEnSaving.value = true
+    try {
+      const payload: { filepath: string; chapters?: ChapterEnDirectoryItem[]; raw_text?: string } = {
+        filepath: filepath.value,
+        chapters: customChapters ?? directoryEnChapters.value,
+        raw_text: customRaw ?? directoryEnRaw.value,
+      }
+      const res = await generateApi.saveDirectoryEn(payload)
+      saveMsg.value = res.data?.message || '✅ 全书英文章名目录已保存！'
+    } catch (e: unknown) {
+      saveMsg.value = `❌ 保存英文目录失败: ${(e as Error).message}`
+    } finally {
+      directoryEnSaving.value = false
+    }
+    setTimeout(() => { saveMsg.value = '' }, 3500)
+  }
+
+  function doTranslateDirectory() {
+    const s = directoryEnState.value
+    s.running = true
+    s.progress = '准备批量翻译全书章名...'
+    s.result = ''
+    s.error = ''
+    const handle = postSSE(
+      '/generate/translate_directory',
+      {
+        llm_config_name: llmConfig.value,
+        filepath: filepath.value,
+        target_style: translateStyle.value,
+        custom_guidance: translateGuidance.value,
+      },
+      (msg, value) => {
+        s.progress = msg
+        if (value !== undefined) s.progressValue = value
+      },
+      (content) => {
+        s.result = content
+      },
+      (err) => {
+        s.error = err
+        s.running = false
+      },
+      () => {
+        s.running = false
+        loadDirectoryEn()
+      },
+    )
+    s.sseHandle = handle
+  }
+
+  // ── 独立双语质量质检审计 (Rule 4: Dual-language Audit) ──
+  const auditState = ref(mkState())
+
+  function doAuditTranslation(num?: number) {
+    const target = num ?? chapterNum.value
+    if (!target) return
+    const s = auditState.value
+    s.running = true
+    s.progress = `准备对第 ${target} 章进行双语独立质检审查...`
+    s.result = ''
+    s.error = ''
+    const handle = postSSE(
+      '/generate/audit_translation',
+      {
+        llm_config_name: llmConfig.value,
+        filepath: filepath.value,
+        chapter_num: target,
+      },
+      (msg, value) => {
+        s.progress = msg
+        if (value !== undefined) s.progressValue = value
+      },
+      (content) => {
+        s.result = content
+      },
+      (err) => {
+        s.error = err
+        s.running = false
+      },
+      () => {
+        s.running = false
+      },
+    )
+    s.sseHandle = handle
+  }
+
+  // ── 全局章节主动联动中枢（选中即同步加载本地，无则清空） ──
+  function autoFillChapterParams(num?: number, forceOverwrite = false) {
+    const chNum = num ?? chapterNum.value
+    if (chNum < 1) return
+
+    const bpText = bp.value.result || ''
+    const otText = outlineText.value || ''
+
+    // 1. 抽取大纲块
+    const reBp = new RegExp(`第\\s*${chNum}\\s*章[\\s\\S]*?(?=第\\s*\\d+\\s*章|$)`)
+    const bpMatch = bpText.match(reBp)
+    const bpBlock = bpMatch ? bpMatch[0] : ''
+
+    // 2. 抽取细纲块
+    const reOt = new RegExp(`(【第\\s*${chNum}\\s*章细纲】[\\s\\S]*?)(?=【第\\s*\\d+\\s*章细纲】|$)`)
+    const otMatch = otText.match(reOt)
+    const otBlock = otMatch ? otMatch[1] : ''
+
+    // 3. 涉及人物
+    const chars: string[] = []
+    const charM = bpBlock.match(/涉及角色[：:]\s*([^\r\n]+)/)
+    if (charM && charM[1]) {
+      const parts = charM[1].split(/[,，、\s]+/).map(s => s.trim()).filter(Boolean)
+      chars.push(...parts)
+    }
+    const sceneCharsMatches = Array.from(otBlock.matchAll(/场景\d+（[^）]+）：([^\s—\-]+)/g))
+    for (const scm of sceneCharsMatches) {
+      if (scm && scm[1]) {
+        const parts = scm[1].split(/[,，、\s]+/)
+        for (const p of parts) {
+          const cleanP = p.replace(/\(.*?\)|（.*?）/g, '').trim()
+          if (cleanP && !chars.includes(cleanP) && cleanP.length <= 10) {
+            chars.push(cleanP)
+          }
+        }
+      }
+    }
+    if (forceOverwrite || !charactersInvolved.value.trim()) {
+      charactersInvolved.value = chars.join('、')
+    }
+
+    // 4. 场景地点
+    const locations: string[] = []
+    const locMatches = Array.from(otBlock.matchAll(/场景\d+（([^）]+)）/g))
+    for (const lm of locMatches) {
+      if (lm && lm[1]) {
+        const cleanLoc = lm[1].split('·')[0].split('（')[0].trim()
+        if (cleanLoc && !locations.includes(cleanLoc)) {
+          locations.push(cleanLoc)
+        }
+      }
+    }
+    if (forceOverwrite || !sceneLocation.value.trim()) {
+      sceneLocation.value = locations.length > 0 ? locations.join(' ➔ ') : ''
+    }
+
+    // 5. 关键物品
+    const itemKeywords = [
+      '药剂', '婚契', '信物', '骨坠', '香囊', '银针', '狼纹', '印记', '药膏',
+      '剧毒', '拒马', '战獒', '羊皮', '额环', '药鼎', '血契', '草药', '匕首',
+      '灵泉', '图腾', '矿石', '诏令', '披风', '法相', '火漆', '暗格'
+    ]
+    const items: string[] = []
+    const fbM = bpBlock.match(/伏笔操作[：:]\s*(?:埋设|强化|回收)?\((.*?)\)/)
+    if (fbM && fbM[1]) {
+      items.push(fbM[1].trim())
+    }
+    for (const kw of itemKeywords) {
+      const reg = new RegExp(`([^，。；、（—\\s]{0,6}${kw}[^，。；、）—\\s]{0,6})`, 'g')
+      const matches = Array.from(otBlock.matchAll(reg))
+      for (const m of matches) {
+        if (m && m[1]) {
+          const phrase = m[1].trim()
+          if (phrase && !items.includes(phrase) && phrase.length >= 2 && phrase.length <= 12) {
+            items.push(phrase)
+            if (items.length >= 5) break
+          }
+        }
+      }
+      if (items.length >= 5) break
+    }
+    if (forceOverwrite || !keyItems.value.trim()) {
+      keyItems.value = items.slice(0, 5).join('、')
+    }
+
+    // 6. 时间约束
+    let extractedTime = ''
+    if (otBlock.includes('成年礼') || bpBlock.includes('成年礼')) {
+      extractedTime = '成年礼誓约圣典进行时，暴雨降临前夜'
+    } else if (otBlock.includes('暴雨') || otBlock.includes('狂暴') || otBlock.includes('避雨')) {
+      extractedTime = '雷暴骤雨深夜至破晓黎明前（濒死毒发极端时限）'
+    } else if (otBlock.includes('拂晓') || otBlock.includes('黎明') || otBlock.includes('逃离')) {
+      extractedTime = '黎明破晓追兵合围前刻（限时逃离生死关头）'
+    } else if (otBlock.includes('五年') || bpBlock.includes('五年')) {
+      extractedTime = '五年后北境初春，帝国王庭召令下达期'
+    } else {
+      const posM = bpBlock.match(/本章定位[：:]\s*([^\r\n]+)/)
+      extractedTime = posM && posM[1] ? `主线推进阶段（${posM[1].trim()}）` : '当前主线推进关键时间段'
+    }
+    if (forceOverwrite || !timeConstraint.value.trim()) {
+      timeConstraint.value = extractedTime
+    }
+
+    // 7. 章节指导
+    let extractedGuidance = ''
+    const summaryM = bpBlock.match(/本章简述[：:]\s*([^\r\n]+)/)
+    const conflictM = otBlock.match(/爽点\/冲突[：:]\s*([^\r\n]+)/)
+    if (summaryM && summaryM[1] && conflictM && conflictM[1]) {
+      extractedGuidance = `【主线要点】${summaryM[1].trim()} 【核心张力】${conflictM[1].trim()}`
+    } else if (summaryM && summaryM[1]) {
+      extractedGuidance = summaryM[1].trim()
+    } else if (conflictM && conflictM[1]) {
+      extractedGuidance = conflictM[1].trim()
+    }
+    if (forceOverwrite || !chGuidance.value.trim()) {
+      chGuidance.value = extractedGuidance
+    }
+
+    if (forceOverwrite) {
+      saveMsg.value = `✅ 已从第 ${chNum} 章大纲与细纲自动填充 5 项剧情参数！`
+      setTimeout(() => { saveMsg.value = '' }, 3000)
+    }
+  }
+
+  function clearChapterParams() {
+    charactersInvolved.value = ''
+    keyItems.value = ''
+    sceneLocation.value = ''
+    timeConstraint.value = ''
+    chGuidance.value = ''
+    saveMsg.value = '🧹 章节参数已清空'
+    setTimeout(() => { saveMsg.value = '' }, 2000)
+  }
+
+  async function syncChapterContext(num: number) {
+    if (num < 1) return
+
+    // 1. 瞬态执行状态保护性处理（后台正在运行的任务或已完成待确认的结果绝对不被中断或误清）
+    if (!finalize.value.running) {
+      finalize.value.result = ''
+      finalize.value.progress = ''
+      finalize.value.error = ''
+    }
+
+    if (!humanize.value.running) {
+      // 若没有后台去AI任务运行，且非待确认结果所属章节，才做重置
+      if (!humanizerPending.value) {
+        _resetHumanizerPreview()
+        humanize.value.result = ''
+        humanize.value.error = ''
+      }
+    }
+
+    if (!translateState.value.running) {
+      translateState.value.result = ''
+      translateState.value.progress = ''
+      translateState.value.error = ''
+    }
+    translateResult.value = ''
+
+    // 2. 自动从 50 章目录大纲中同步当前章的【涉及角色】与【章节简述】
+    autoFillChapterParams(num)
+
+    // 3. 自动同步当前章的【场景细纲】，无则清空
+    if (!outlineText.value) {
+      await loadOutlineText()
+    } else {
+      extractChapterToEdit(num)
+    }
+
+    // 4. 尝试从本地加载草稿正文，无则清空
+    await loadChapterDraft(num)
+
+    // 5. 尝试从本地加载出海英文译文，无则清空
+    await loadChapterEn(num)
+
+    // 5.1 尝试加载该章全套流水线产物快照（草稿、润色、清单、译文等）
+    await loadChapterArtifacts(num)
+
+    // 6. 刷新已有章节列表
+    await loadExistingChapters()
+
+    // 7. 自动同步当前章的幕间因果交接（Semantic Handoff）
+    await loadHandoff(num)
+  }
+
+  async function loadHandoff(num?: number) {
+    if (!filepath.value) return
+    const targetNum = num ?? chapterNum.value
+    handoffLoading.value = true
+    try {
+      const res = await generateApi.getHandoff(targetNum, filepath.value)
+      handoffData.value = res.data.handoff
+    } catch {
+      handoffData.value = null
+    }
+    handoffLoading.value = false
+  }
+
+  async function doColdStartBackfill() {
+    if (!filepath.value || !llmConfig.value) return
+    coldStartLoading.value = true
+    coldStartResult.value = null
+    try {
+      const res = await generateApi.coldStartBackfill({
+        llm_config_name: llmConfig.value,
+        filepath: filepath.value,
+      })
+      coldStartResult.value = res.data
+      await loadHandoff()
+    } catch (e: any) {
+      coldStartResult.value = { success: false, message: e.message || '冷启动回溯失败' }
+    }
+    coldStartLoading.value = false
+  }
+
+  async function doPreWriteGateCheck() {
+    if (!filepath.value || !llmConfig.value) return
+    preWriteGateLoading.value = true
+    preWriteGateResult.value = null
+    try {
+      const res = await generateApi.preWriteGate({
+        llm_config_name: llmConfig.value,
+        filepath: filepath.value,
+        chapter_num: chapterNum.value,
+      })
+      preWriteGateResult.value = res.data
+    } catch (e: any) {
+      preWriteGateResult.value = { passed: true, summary: `体检异常: ${e.message}`, contradictions: [], continuity_warnings: [] }
+    }
+    preWriteGateLoading.value = false
+  }
+
+  async function doSpanRepair() {
+    if (!filepath.value || !llmConfig.value || !spanRepairTarget.value.trim()) return
+    spanRepairLoading.value = true
+    spanRepairResult.value = null
+    try {
+      const res = await generateApi.spanRepair({
+        llm_config_name: llmConfig.value,
+        filepath: filepath.value,
+        chapter_num: chapterNum.value,
+        target_span: spanRepairTarget.value.trim(),
+        repair_instruction: spanRepairInstruction.value.trim(),
+      })
+      spanRepairResult.value = res.data
+      if (res.data.success && res.data.repaired_text) {
+        chapter.value.result = res.data.repaired_text
+      }
+    } catch (e: any) {
+      spanRepairResult.value = { success: false, message: e.message || '修补失败' }
+    }
+    spanRepairLoading.value = false
+  }
+
+  async function loadFixedTerms() {
+    if (!filepath.value) return
+    fixedTermsLoading.value = true
+    try {
+      const res = await generateApi.getFixedTerms(filepath.value)
+      fixedTermsContent.value = res.data.content || ''
+    } catch {
+      // ignore
+    } finally {
+      fixedTermsLoading.value = false
+    }
+  }
+
+  async function saveFixedTerms(content?: string) {
+    if (!filepath.value) return
+    const textToSave = content !== undefined ? content : fixedTermsContent.value
+    try {
+      await generateApi.saveFixedTerms(filepath.value, textToSave)
+      fixedTermsContent.value = textToSave
+    } catch {
+      // ignore
+    }
+  }
+
+  async function selectChapter(num: number) {
+    if (num < 1) return
+    if (pipelineRunning.value) {
+      // 流水线生产中：不切换主编辑器的全局 chapterNum，而是平滑打开独立查阅器，不影响后台编译
+      openQuickReader(num)
+      return
+    }
+    if (chapterNum.value !== num) {
+      chapterNum.value = num
+    }
+    await syncChapterContext(num)
+  }
+
+  function prevChapter() {
+    if (chapterNum.value > 1) {
+      if (pipelineRunning.value) {
+        openQuickReader(chapterNum.value - 1)
+      } else {
+        selectChapter(chapterNum.value - 1)
+      }
+    }
+  }
+
+  function nextChapter() {
+    if (chapterNum.value < numChapters.value) {
+      if (pipelineRunning.value) {
+        openQuickReader(chapterNum.value + 1)
+      } else {
+        selectChapter(chapterNum.value + 1)
+      }
+    }
+  }
+
+  watch(chapterNum, (newVal, oldVal) => {
+    if (newVal && newVal !== oldVal && !chapter.value.running && !translateState.value.running) {
+      syncChapterContext(newVal)
+    }
+  })
+
   function doHumanize() {
     _resetHumanizerPreview()
+    humanizerChapterNum.value = chapterNum.value
     const s = humanize.value
     s.running = true; s.progress = ''; s.result = ''; s.error = ''; s.progressValue = undefined
     const handle = postSSE(
@@ -1315,8 +2699,14 @@ export function useWorkshopState() {
     humanize, humanizerBatch, humanizerR8, humanizerFocus,
     humanizerStart, humanizerEnd, humanizerDepth,
     humanizerOriginal, humanizerHumanized, humanizerChanges,
-    humanizerPreviewTab, humanizerPending, humanizerSaving,
+    humanizerPreviewTab, humanizerPending, humanizerSaving, humanizerChapterNum,
     doHumanize, doBatchHumanize, doConfirmHumanize,
+    translateState, translateStyle, translateGuidance, translateResult, translateSaving,
+    doTranslateChapter, saveChapterEn, loadChapterEn, loadChapterArtifacts,
+    directoryEnChapters, directoryEnRaw, directoryEnLoading, directoryEnSaving, directoryEnState, localizationTab,
+    loadDirectoryEn, saveDirectoryEn, doTranslateDirectory,
+    auditState, doAuditTranslation,
+    selectChapter, prevChapter, nextChapter, syncChapterContext, autoFillChapterParams, clearChapterParams,
     // misc
     exporting, saveMsg, reloading,
     // functions
@@ -1328,8 +2718,9 @@ export function useWorkshopState() {
     doGenerateBP,
     detailedOutline, outlineText, outlineBatchStart, outlineBatchSize, outlineMode,
     outlineBatchResult, outlineBatchBackup, outlineRevisionGuidance, outlineRevision,
-    doGenerateOutlineBatch, loadOutlineText, saveOutline, saveBatchOutline,
-    doReviseOutlineBatch, revertOutlineBatch, extractChapterToEdit,
+    doGenerateOutlineBatch, loadOutlineText, saveOutline, saveBatchOutline, saveSingleChapterOutline,
+    doReviseOutlineBatch, revertOutlineBatch, extractChapterToEdit, currentChapterOutline,
+    existingChapters, loadExistingChapters, loadChapterDraft,
     doGenerateChapter, doFinalize,
     // improv mode
     workflowMode, setWorkflowMode,
@@ -1346,5 +2737,26 @@ export function useWorkshopState() {
     doBatchGenerate, doExpand, doExportNovel,
     doContinueArch, doContStepSeed, doContStepWorld, doContStepChars, doContStepArcs, doContStepCharState, doContAssemble,
     compressRunning, compressResult, compressWorldBuilding, doCompressContext,
+    // pipeline control room
+    // view mode
+    workshopViewMode, setWorkshopViewMode,
+    // pipeline control room
+    pipelineOpen, pipelineRunning, pipelineElapsed, pipelineStages, pipelineMode, setPipelineMode, defaultPipelineStages,
+    pipelineActiveTab, pipelineAutoRetry, pipelineStatusMsg, pipelineAutoAdvance,
+    fastIncubating, fastIncubateProgress, doFastIncubateBook,
+    pipelineProgressVal, pipelineCurrentStageId, pipelineTargetChapter, pipelineTerminalLogs,
+    pipelineData, openPipelineControlRoom, closePipelineControlRoom,
+    doRunPipeline, cancelPipeline,
+    pipelineReviewStrength, setReviewStrength, pipelineContextToggles,
+    batchQueueRunning, batchQueuePaused, batchQueueStart, batchQueueEnd, batchQueueCurrent,
+    batchQueueStatusMap, doRunBatchQueue, togglePauseBatchQueue, stopBatchQueue,
+    whitepaperModalOpen, openWhitepaperModal, closeWhitepaperModal,
+    quickReaderOpen, quickReaderChapter, openQuickReader, closeQuickReader,
+    // continuity & semantic handoff
+    handoffData, handoffLoading, coldStartLoading, coldStartResult,
+    preWriteGateLoading, preWriteGateResult, spanRepairLoading,
+    spanRepairTarget, spanRepairInstruction, spanRepairResult,
+    loadHandoff, doColdStartBackfill, doPreWriteGateCheck, doSpanRepair,
+    adultMode, fixedTermsContent, fixedTermsLoading, loadFixedTerms, saveFixedTerms,
   }
 }

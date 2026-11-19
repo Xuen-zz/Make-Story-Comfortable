@@ -4,9 +4,10 @@
 向量库相关操作（初始化、更新、检索、清空、文本切分等）
 """
 import os
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
 import logging
 import traceback
-import nltk
+# import nltk (lazy imported in chunk_text)
 import numpy as np
 import re
 import ssl
@@ -23,10 +24,11 @@ logging.basicConfig(
 # 禁用特定的Torch警告
 warnings.filterwarnings('ignore', message='.*Torch was not compiled with flash attention.*')
 os.environ["TOKENIZERS_PARALLELISM"] = "false"  # 禁用tokenizer并行警告
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
 from chromadb.config import Settings
 from langchain_core.documents import Document
-from sklearn.metrics.pairwise import cosine_similarity
+# from sklearn.metrics.pairwise import cosine_similarity
 from .common import call_with_retry
 
 def get_vectorstore_dir(filepath: str) -> str:
@@ -54,7 +56,13 @@ def init_vector_store(embedding_adapter, texts, filepath: str):
     在 filepath 下创建/加载一个 Chroma 向量库并插入 texts。
     如果Embedding失败，则返回 None，不中断任务。
     """
-    from langchain.embeddings.base import Embeddings as LCEmbeddings
+    if not embedding_adapter or (getattr(embedding_adapter, '__class__', None) and embedding_adapter.__class__.__name__ == 'DummyEmbeddingAdapter'):
+        logging.info("本地免密/纯文学模式 (DummyEmbeddingAdapter)，跳过向量库构建。")
+        return None
+    try:
+        from langchain_core.embeddings import Embeddings as LCEmbeddings
+    except ImportError:
+        from langchain.embeddings.base import Embeddings as LCEmbeddings
 
     store_dir = get_vectorstore_dir(filepath)
     os.makedirs(store_dir, exist_ok=True)
@@ -97,7 +105,12 @@ def load_vector_store(embedding_adapter, filepath: str):
     读取已存在的 Chroma 向量库。若不存在则返回 None。
     如果加载失败（embedding 或IO问题），则返回 None。
     """
-    from langchain.embeddings.base import Embeddings as LCEmbeddings
+    if not embedding_adapter or (getattr(embedding_adapter, '__class__', None) and embedding_adapter.__class__.__name__ == 'DummyEmbeddingAdapter'):
+        return None
+    try:
+        from langchain_core.embeddings import Embeddings as LCEmbeddings
+    except ImportError:
+        from langchain.embeddings.base import Embeddings as LCEmbeddings
     store_dir = get_vectorstore_dir(filepath)
     if not os.path.exists(store_dir):
         logging.info("Vector store not found. Will return None.")
@@ -154,7 +167,11 @@ def split_text_for_vectorstore(chapter_text: str, max_length: int = 500, similar
     
     # nltk.download('punkt', quiet=True)
     # nltk.download('punkt_tab', quiet=True)
-    sentences = nltk.sent_tokenize(chapter_text)
+    try:
+        import nltk
+        sentences = nltk.sent_tokenize(chapter_text)
+    except Exception:
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?。！？\n])\s*', chapter_text) if s.strip()]
     if not sentences:
         return []
     
@@ -184,6 +201,8 @@ def update_vector_store(embedding_adapter, new_chapter: str, filepath: str):
     将最新章节文本插入到向量库中。
     若库不存在则初始化；若初始化/更新失败，则跳过。
     """
+    if not embedding_adapter or (getattr(embedding_adapter, '__class__', None) and embedding_adapter.__class__.__name__ == 'DummyEmbeddingAdapter'):
+        return
     from utils import read_file, clear_file_content, save_string_to_txt
     splitted_texts = split_text_for_vectorstore(new_chapter)
     if not splitted_texts:
@@ -300,7 +319,10 @@ def init_author_vector_store(embedding_adapter, texts: list, filepath: str = "",
     创建/加载一个作者参考库 Chroma 向量库并插入 texts。
     使用独立的 collection name: author_reference_collection。
     """
-    from langchain.embeddings.base import Embeddings as LCEmbeddings
+    try:
+        from langchain_core.embeddings import Embeddings as LCEmbeddings
+    except ImportError:
+        from langchain.embeddings.base import Embeddings as LCEmbeddings
 
     store_dir = get_author_vectorstore_dir(filepath=filepath, style_name=style_name, styles_dir=styles_dir)
     os.makedirs(store_dir, exist_ok=True)
@@ -343,7 +365,10 @@ def load_author_vector_store(embedding_adapter, filepath: str = "",
     """
     读取已存在的作者参考库 Chroma 向量库。若不存在则返回 None。
     """
-    from langchain.embeddings.base import Embeddings as LCEmbeddings
+    try:
+        from langchain_core.embeddings import Embeddings as LCEmbeddings
+    except ImportError:
+        from langchain.embeddings.base import Embeddings as LCEmbeddings
 
     store_dir = get_author_vectorstore_dir(filepath=filepath, style_name=style_name, styles_dir=styles_dir)
     if not os.path.exists(store_dir):

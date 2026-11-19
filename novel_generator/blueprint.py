@@ -31,6 +31,8 @@ def compute_chunk_size(number_of_chapters: int, max_tokens: int) -> int:
     chunk_size = ratio_rounded_to_10 - 10
     if chunk_size < 1:
         chunk_size = 1
+    if chunk_size > 25:
+        chunk_size = 25
     if chunk_size > number_of_chapters:
         chunk_size = number_of_chapters
     return chunk_size

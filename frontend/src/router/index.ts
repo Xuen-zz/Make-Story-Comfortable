@@ -5,9 +5,37 @@ const router = createRouter({
   routes: [
     {
       path: '/',
+      name: 'workflow',
+      component: () => import('@/views/WorkflowCanvasView.vue'),
+      meta: { title: '节点工作流画布' },
+    },
+    {
+      path: '/workshop',
       name: 'workshop',
       component: () => import('@/views/WorkshopView.vue'),
-      meta: { title: '创作工坊' },
+      meta: { title: '写书工单台' },
+    },
+    {
+      path: '/workflow',
+      redirect: '/',
+    },
+    {
+      path: '/settings',
+      name: 'settings',
+      component: () => import('@/views/SettingsHubView.vue'),
+      meta: { title: '资产与系统设置' },
+    },
+    {
+      path: '/assets',
+      name: 'assets',
+      component: () => import('@/views/AssetsHubView.vue'),
+      meta: { title: '创作资产库' },
+    },
+    {
+      path: '/system',
+      name: 'system',
+      component: () => import('@/views/SystemHubView.vue'),
+      meta: { title: '系统与工具' },
     },
     {
       path: '/config',

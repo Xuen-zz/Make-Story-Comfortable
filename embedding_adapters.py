@@ -29,6 +29,16 @@ class BaseEmbeddingAdapter:
     def embed_query(self, query: str) -> List[float]:
         raise NotImplementedError
 
+class DummyEmbeddingAdapter(BaseEmbeddingAdapter):
+    """
+    内置本地免密/纯文学适配器（无需外部 Key，返回零向量，保证单机零配置即可直接写作）
+    """
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        return [[0.0] * 8 for _ in texts]
+
+    def embed_query(self, query: str) -> List[float]:
+        return [0.0] * 8
+
 class OpenAIEmbeddingAdapter(BaseEmbeddingAdapter):
     """
     基于 OpenAIEmbeddings（或兼容接口）的适配器
@@ -321,7 +331,9 @@ def create_embedding_adapter(
         return _adapter_cache[cache_key]
 
     fmt = cache_key[0]
-    if fmt == "openai":
+    if fmt in ("dummy", "local", "none", "默认内置", "内置免密"):
+        adapter = DummyEmbeddingAdapter()
+    elif fmt == "openai":
         adapter = OpenAIEmbeddingAdapter(api_key, base_url, model_name)
     elif fmt == "azure openai":
         adapter = AzureOpenAIEmbeddingAdapter(api_key, base_url, model_name)

@@ -56,6 +56,10 @@ export const configApi = {
     api.post('/config/user_profile/extract', { text, llm_config_name }),
   appendProfile: (preferences: string) =>
     api.post('/config/user_profile/append', { preferences }),
+  getQualityGuard: () => api.get('/config/quality_guard'),
+  saveQualityGuard: (data: Record<string, unknown>) => api.post('/config/quality_guard', data),
+  testZhuque: (data: { zhuque_api_key: string }) => api.post('/config/zhuque/test', data),
+  testCodex: (data: { codex_model?: string }) => api.post('/config/codex/test', data),
 }
 
 // ── Presets ──────────────────────────────────────────────────────────────────
@@ -177,10 +181,27 @@ export const generateApi = {
   expand: (body: Record<string, unknown>) => `/generate/expand`,
   status: (filepath: string) => api.get(`/generate/status`, { params: { filepath } }),
   chapters: (filepath: string) => api.get(`/generate/chapters`, { params: { filepath } }),
+  dashboard: (filepath: string) => api.get(`/generate/dashboard`, { params: { filepath } }),
   getChapter: (num: number, filepath: string) =>
     api.get(`/generate/chapter/${num}`, { params: { filepath } }),
   saveChapter: (num: number, content: string, filepath: string) =>
     api.put(`/generate/chapter/${num}`, { content }, { params: { filepath } }),
+  getChapterEn: (num: number, filepath: string) =>
+    api.get(`/generate/chapter_en/${num}`, { params: { filepath } }),
+  saveChapterEn: (num: number, content: string, filepath: string) =>
+    api.put(`/generate/chapter_en/${num}`, { content }, { params: { filepath } }),
+  getChapterArtifacts: (num: number, filepath: string) =>
+    api.get(`/generate/chapter_artifacts/${num}`, { params: { filepath } }),
+  contextPreview: (chapter_num: number, filepath: string) =>
+    api.get(`/generate/chapter_context_preview`, { params: { chapter_num, filepath } }),
+  pipelineChapter: () => `/generate/pipeline_chapter`,
+  translateChapter: () => `/generate/translate`,
+  getDirectoryEn: (filepath: string) =>
+    api.get(`/generate/directory_en`, { params: { filepath } }),
+  saveDirectoryEn: (body: { filepath: string; chapters?: any[]; raw_text?: string }) =>
+    api.put(`/generate/directory_en`, body),
+  translateDirectory: () => `/generate/translate_directory`,
+  auditTranslation: () => `/generate/audit_translation`,
   saveArchitecture: (content: string, filepath: string) =>
     api.put(`/generate/architecture`, { content, filepath }),
   saveComponent: (component: string, content: string, filepath: string) =>
@@ -237,6 +258,27 @@ export const generateApi = {
     api.get(`/generate/open_threads`, { params: { filepath } }),
   saveOpenThreads: (content: string, filepath: string) =>
     api.put(`/generate/open_threads`, { content, filepath }),
+  // ── 因果连续性与幕间交接（Semantic Handoff & Continuity） ──
+  getHandoff: (chapterNum: number, filepath: string) =>
+    api.get(`/generate/handoff`, { params: { chapter_num: chapterNum, filepath } }),
+  coldStartBackfill: (body: { llm_config_name: string; filepath: string; max_chapters?: number }) =>
+    api.post(`/generate/cold_start_backfill`, body),
+  preWriteGate: (body: { llm_config_name: string; filepath: string; chapter_num: number }) =>
+    api.post(`/generate/pre_write_gate`, body),
+  spanRepair: (body: { llm_config_name: string; filepath: string; chapter_num: number; target_span: string; repair_instruction: string }) =>
+    api.post(`/generate/span_repair`, body),
+  getCanonHistory: (filepath: string) =>
+    api.get(`/generate/canon_history`, { params: { filepath } }),
+  updateCanonHistory: (body: { llm_config_name: string; filepath: string; chapter_num: number }) =>
+    api.post(`/generate/update_canon_history`, body),
+  getFixedTerms: (filepath: string) =>
+    api.get('/generate/fixed_terms', { params: { filepath } }),
+  saveFixedTerms: (filepath: string, content: string) =>
+    api.post('/generate/fixed_terms', { filepath, content }),
+  getPipelineRules: () =>
+    api.get('/generate/pipeline_rules'),
+  runScriptAudit: (data: { text_zh?: string; text_en?: string }) =>
+    api.post('/generate/script_audit', data),
 }
 
 // ── XP Presets ───────────────────────────────────────────────────────────────
@@ -308,4 +350,33 @@ export const consistencyApi = {
 // ── Brainstorm ───────────────────────────────────────────────────────────────
 export const brainstormApi = {
   chatUrl: () => `/brainstorm/chat`,
+}
+
+// ── ComfyUI Workflow Canvas ──────────────────────────────────────────────────
+export const workflowApi = {
+  catalog: () => api.get('/workflow/catalog'),
+  list: () => api.get('/workflow/list'),
+  save: (body: { id?: string; name: string; description?: string; nodes: unknown[]; edges: unknown[] }) =>
+    api.post('/workflow/save', body),
+  remove: (wfId: string) => api.delete(`/workflow/${encodeURIComponent(wfId)}`),
+  setDefault: (workflow_id: string) => api.post('/workflow/set_default', { workflow_id }),
+  executeUrl: () => `/workflow/execute`,
+  gateDecision: (runId: string, body: { action: 'approve' | 'cancel'; selected_branch?: string; edited_text?: string }) =>
+    api.post(`/workflow/gate/${encodeURIComponent(runId)}`, body),
+  cancel: (runId: string) => api.post(`/workflow/cancel/${encodeURIComponent(runId)}`),
+}
+
+// ── 独立模型提供商与桌面系统 API ──────────────────────────────────────────────
+export const providersApi = {
+  list: () => api.get('/config/providers'),
+  save: (body: Record<string, unknown>) => api.post('/config/providers/save', body),
+  fetchModels: (body: { interface_format: string; base_url: string; api_key: string }) =>
+    api.post('/config/providers/fetch_models', body),
+  testConnection: (body: { interface_format: string; base_url: string; api_key: string; model_name: string }) =>
+    api.post('/config/providers/test_connection', body),
+}
+
+export const systemApi = {
+  info: () => api.get('/system/info'),
+  setBooksRoot: (books_root: string) => api.post('/system/books_root', { books_root }),
 }

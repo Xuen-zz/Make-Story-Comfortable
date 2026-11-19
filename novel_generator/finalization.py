@@ -291,6 +291,8 @@ def finalize_chapter(
     chapters_dir = os.path.join(filepath, "chapters")
     chapter_file = os.path.join(chapters_dir, f"chapter_{novel_number}.txt")
     chapter_text = read_file(chapter_file).strip()
+    import re
+    chapter_text = re.sub(r'^[\u2705\u274c\u26a0].*?\n+', '', chapter_text).strip()
     if not chapter_text:
         logging.warning(f"Chapter {novel_number} is empty, cannot finalize.")
         return
@@ -377,6 +379,19 @@ def finalize_chapter(
         except Exception as e:
             logging.error(f"[Improv] open_threads update failed: {e}")
 
+    # ── 自动提炼生成下一章的幕间因果交接（Semantic Handoff） ──
+    try:
+        from novel_generator.continuity import build_semantic_handoff_from_chapter
+        build_semantic_handoff_from_chapter(
+            filepath=filepath,
+            chapter_num=novel_number,
+            chapter_text=chapter_text,
+            llm_adapter=llm_adapter
+        )
+        logging.info(f"[Finalize] 已自动提炼并存储第 {novel_number + 1} 章的 Semantic Handoff")
+    except Exception as e:
+        logging.warning(f"[Finalize] 自动提炼下章 Handoff 失败: {e}")
+
     logging.info(f"Chapter {novel_number} has been finalized.")
 
 def expand_scenes(
@@ -394,7 +409,8 @@ def expand_scenes(
     polish_guidance: str = "",
     polish_mode: str = "enhance",
     extra_context: str = "",
-    progress=None
+    progress=None,
+    custom_prompt_override: str = "",
 ) -> str:
     """
     对章节文本进行润色。支持多种模式：
@@ -414,6 +430,63 @@ def expand_scenes(
     )
 
     _MODE_PROMPTS = {
+        "editorial_review": """你是一位拥有二十年畅销网文出版与爆款运营经验的资深中文总编辑。请对以下章节草稿执行【强力去AI味 + 节奏审校】。
+
+【审校与去AI味六大铁律】：
+1. 严守剧情主线：只改表达、节奏与画面质感，严禁篡改故事主线、人物立场、设定口径与因果走向。
+2. 彻底清除中文大模型机械句式壳（重点查杀）：
+   - 禁绝机械对照与转折壳：『不是……而是……』『与其说……不如说……』『不仅……更……』『真正重要的是……』『本质上……』；
+   - 禁绝机械三段排比与对称短句（如全篇清一色 10~15 字单句独立成段，或“她蹲下身，拭去血珠，检查伤口”式整齐三连动作）；
+   - 必须拉大长短句错落感：具体动作与环境阻力长句（30~50字）➔ 突然接一个 2~5 字极短独立句（如“没应。”“咔嚓。”）➔ 穿插口语短促对白。
+3. 彻底封杀 AI 生理反射套话与假深沉旁白：
+   - 严禁出现：『深吸一口气』『眼底闪过一抹』『勾起一抹冷笑』『嘴角微扬』『空气仿佛凝固』『瞳孔骤缩』『喉结上下滚动』『倒吸一口凉气』『指尖轻颤』『不知为何』『不得不说』『这一刻，他终于明白了……』；
+   - 严禁作者代替读者总结情绪或下结论，必须用“具体器物阻力、动作反应、带刺的口语台词”让读者自己看出来。
+4. 人物对话口语化、有区分度：删去播音腔、讲义腔和翻译腔，让每个人物按身份说话带出潜台词与性格。
+5. 核对事实与知情边界：对照参考资料中的细纲、角色状态、前文摘要与世界观，修正常识矛盾、物件持有或视角越界。
+6. 守住章末强断章钩子：本章最后 150 字严禁平淡泄气收尾，必须卡在危机爆发、利益翻盘、反转或新人物入局的最紧绷处！
+
+【输出格式要求】：
+先输出审校润色后的完整正式章节正文；
+然后另起一行输出分隔符 `---`，紧随其后输出 `【修改清单】`，用简明要点列出：删掉了哪些 AI 套话/机械句式、强化了哪几处动作与钩子。
+
+===== 章节原文 =====
+{chapter_text}
+""",
+        "editorial_review_light": """你是一位专业中文小说审稿编辑。请对以下章节草稿执行【轻度流畅润色 + 逻辑校对】。
+
+【润色准则】：
+1. 最大程度保留原草稿的文风、句式和叙事习惯，不做大刀阔斧的改写。
+2. 仅修正以下问题：错别字与语病、明显重复啰嗦的句子、零星突兀的 AI 套话（如“空气仿佛凝固”“眼底闪过一抹”）、以及对照参考资料修正人物称谓或设定矛盾。
+3. 确保章末最后几句过渡自然且保有悬念，不平淡流水账收尾。
+
+【输出格式要求】：
+先输出润色后的完整正式章节正文；
+然后另起一行输出分隔符 `---`，紧随其后输出 `【修改清单】`，简要说明修正的语句与校对点。
+
+===== 章节原文 =====
+{chapter_text}
+""",
+        "rule_polish": """你是一位资深网络小说编辑与审稿人。请对以下章节进行严格润色。
+【润色任务】只改表达，不改剧情、不改设定、不增删情节。
+
+【小说流水线底层规则 · 中文润色九大铁律】（必须逐条对照替换，输出附各项剩余次数）：
+1.【脚本】跨章禁用词，每词全章≤2次：pale, iron, dust, ground, dared, northern, ancient/archaic/ancestral, dormant, heavy, surged, blood welled/trickled, cold sweat, bit down, dug fingertips（苍白/铁箍/灰尘/地面/竟敢/北境/古老/蛰伏/沉重/翻涌/冷汗/咬牙/掐指）。
+2.【脚本】否定排比（No X. No Y. / neither…nor / 不是A也不是B / 没有...也没有... / 既不...也不...）全章合计≤2，按功能识别，不只匹配字面。
+3. 同一比喻域（账本、法务、金属、冰）全章≤3处，且只归属固定角色。
+4. 每场景精确数字≤2个；禁用医学术语（capillary, patella, respiratory, 毛细血管, 髌骨, 呼吸道等）。
+5. 同类描写（声音平静/冷/平稳）全章只留一处。
+6.【脚本】连续3句同结构、分词短语收尾每段≤1次、remained 全章≤3。
+7. 修仙词外溢全部替换：vitality, life force, spirit, pressure point, radiance, mortal, energy, meridians, dantian, qi, cultivation, realm（严禁经脉、丹田、灵力、真气、境界、修炼；血脉异常统一写成"血脉堵塞/兽魂受损"）。
+8. 对照正史页和固定写法表核对物件位置、伤势、颜色、称谓、知情范围（严禁让角色得知不在场的信息）。
+9.【脚本】连续200字以上相似内容视为重复，删除后一处。
+
+【输出格式要求】：
+先输出润色后的完整章节正文；
+然后另起一行分隔线，输出【修改清单】（逐项统计每类替换处数与剩余配额）。
+
+===== 章节原文 =====
+{chapter_text}
+""",
         "modify": """\
 你是一位专业的小说编辑，擅长根据作者意图修改剧情。
 
@@ -449,7 +522,13 @@ def expand_scenes(
 输出完整的补充后章节文本，不要解释。""",
     }
 
-    if polish_mode in _MODE_PROMPTS:
+    if custom_prompt_override and custom_prompt_override.strip():
+        tmpl = custom_prompt_override.strip()
+        if "{chapter_text}" in tmpl:
+            prompt = tmpl.replace("{chapter_text}", chapter_text)
+        else:
+            prompt = f"{tmpl}\n\n===== 章节原文 =====\n{chapter_text}"
+    elif polish_mode in _MODE_PROMPTS:
         prompt = _MODE_PROMPTS[polish_mode].format(chapter_text=chapter_text)
     else:
         # enhance 模式：使用预设的 scene_expansion_prompt
@@ -466,8 +545,35 @@ def expand_scenes(
         prompt = f"【文风要求】\n{writing_style}\n\n{prompt}"
     if narrative_instruction:
         prompt = f"\n【叙事风格指导-章节层】\n{narrative_instruction}\n\n" + prompt
+    # 若为规则润色模式，在 prompt 前注入确定性脚本预检报告
+    if polish_mode == "rule_polish":
+        try:
+            from novel_generator.pipeline_rules import DeterministicRuleChecker
+            pre_report = DeterministicRuleChecker.run_full_script_audit(text_zh=chapter_text)
+            pre_text = DeterministicRuleChecker.format_script_report_as_text(pre_report)
+            prompt = f"【润色前确定性脚本初检报告（供重点整改参考）】:\n{pre_text}\n\n" + prompt
+        except Exception:
+            pass
+
     expanded_text = invoke_with_cleaning(llm_adapter, prompt, progress=progress)
-    return expanded_text if expanded_text else chapter_text
+    final_output = expanded_text if expanded_text else chapter_text
+
+    # 若为规则润色模式，后验脚本检测并自动追加配额剩余统计到修改清单
+    if polish_mode == "rule_polish" and final_output:
+        try:
+            from novel_generator.pipeline_rules import DeterministicRuleChecker
+            post_report = DeterministicRuleChecker.run_full_script_audit(text_zh=final_output)
+            post_text = DeterministicRuleChecker.format_script_report_as_text(post_report)
+            if "【修改清单】" in final_output:
+                final_output = final_output + f"\n\n{post_text}"
+            elif "修改清单" in final_output:
+                final_output = final_output + f"\n\n{post_text}"
+            else:
+                final_output = final_output + f"\n\n【修改清单】\n{post_text}"
+        except Exception:
+            pass
+
+    return final_output
 
 def enrich_chapter_text(
     chapter_text: str,

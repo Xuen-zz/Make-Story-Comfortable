@@ -11,8 +11,8 @@ from pydantic import BaseModel
 
 router = APIRouter(tags=["xp_presets"])
 
-XP_PRESETS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))), "xp_presets.json")
+from app_paths import get_data_file
+XP_PRESETS_FILE = get_data_file("xp_presets.json")
 
 
 def _load_presets() -> list[dict]:

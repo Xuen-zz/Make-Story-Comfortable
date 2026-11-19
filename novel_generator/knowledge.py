@@ -7,7 +7,7 @@ import os
 import logging
 import re
 import traceback
-import nltk
+# import nltk (lazy imported in _split_sentences)
 import warnings
 from utils import read_file
 from novel_generator.vectorstore_utils import (
@@ -37,7 +37,11 @@ def _split_sentences(content: str) -> list:
             continue
         # 如果片段仍然很长且包含英文句子结构，用 nltk 进一步分割
         if len(part) > 1000:
-            sub_sents = nltk.sent_tokenize(part)
+            try:
+                import nltk
+                sub_sents = nltk.sent_tokenize(part)
+            except Exception:
+                sub_sents = [s.strip() for s in re.split(r'(?<=[.!?\n])\s*', part) if s.strip()]
             sentences.extend(sub_sents)
         else:
             sentences.append(part)

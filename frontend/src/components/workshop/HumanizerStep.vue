@@ -17,6 +17,26 @@ const previewContent = computed(() => {
 <template>
   <StepCard :step="6" title="去 AI 痕迹" description="清除章节中的 AI 生成痕迹，保留文学性和叙事节奏">
     <div class="space-y-3">
+      <!-- 跨章节后台任务运行/完成提醒横幅 -->
+      <div v-if="state.humanize.value.running && state.chapterNum.value !== state.humanizerChapterNum.value" class="p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between text-xs text-blue-900 shadow-sm">
+        <div class="flex items-center gap-2">
+          <span class="inline-block w-2.5 h-2.5 rounded-full bg-blue-600 animate-pulse" />
+          <span>后台正在对<strong>【第 {{ state.humanizerChapterNum.value }} 章】</strong>执行去 AI 痕迹处理（{{ state.humanize.value.progress || '改写中...' }}）... 任务在后台持续进行，不会中断。</span>
+        </div>
+        <button @click="state.selectChapter(state.humanizerChapterNum.value)" class="px-2.5 py-1 bg-white border border-blue-300 rounded shadow-sm text-xs font-semibold text-blue-800 hover:bg-blue-100 cursor-pointer" type="button">
+          切回第 {{ state.humanizerChapterNum.value }} 章
+        </button>
+      </div>
+
+      <div v-else-if="state.humanizerPending.value && state.chapterNum.value !== state.humanizerChapterNum.value" class="p-3 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center justify-between text-xs text-emerald-900 shadow-sm">
+        <div class="flex items-center gap-2">
+          <span class="text-base">🔔</span>
+          <span><strong>【第 {{ state.humanizerChapterNum.value }} 章】</strong>去 AI 痕迹已处理完成！随时切回即可查看版本对比并确认保存。</span>
+        </div>
+        <button @click="state.selectChapter(state.humanizerChapterNum.value)" class="px-2.5 py-1 bg-emerald-700 text-white rounded shadow-sm text-xs font-semibold hover:bg-emerald-800 cursor-pointer" type="button">
+          切回第 {{ state.humanizerChapterNum.value }} 章查看对比
+        </button>
+      </div>
       <!-- 模式切换 -->
       <div class="flex items-center gap-4">
         <label class="flex items-center gap-1.5 text-sm">
@@ -100,6 +120,7 @@ const previewContent = computed(() => {
       <!-- 进度显示（处理中） -->
       <div v-if="state.humanize.value.running || (!state.humanizerPending.value && (state.humanize.value.progress || state.humanize.value.error))">
         <StreamOutput
+          :key="state.chapterNum.value"
           :progress="state.humanize.value.progress"
           :result="state.humanizerPending.value ? '' : state.humanize.value.result"
           :error="state.humanize.value.error"

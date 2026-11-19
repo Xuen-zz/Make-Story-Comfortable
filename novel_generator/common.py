@@ -115,12 +115,18 @@ def invoke_with_cleaning(llm_adapter, prompt: str, max_retries: int = 3,
     _timeout = getattr(llm_adapter, 'timeout', '?')
     _max_tokens = getattr(llm_adapter, 'max_tokens', '?')
 
-    print("\n" + "="*50)
-    print(f"发送到 LLM 的提示词 (字符数={prompt_chars}, 估算tokens≈{prompt_tokens_est}, "
-          f"max_tokens={_max_tokens}, timeout={_timeout}s):")
-    print("-"*50)
-    print(prompt)
-    print("="*50 + "\n")
+    try:
+        print("\n" + "="*50)
+        print(f"发送到 LLM 的提示词 (字符数={prompt_chars}, 估算tokens≈{prompt_tokens_est}, "
+              f"max_tokens={_max_tokens}, timeout={_timeout}s):")
+        print("-"*50)
+        try:
+            print(prompt)
+        except Exception:
+            pass
+        print("="*50 + "\n")
+    except Exception:
+        pass
 
     logging.info(f"[invoke] 开始调用 LLM: prompt字符数={prompt_chars}, "
                  f"估算tokens≈{prompt_tokens_est}, max_tokens={_max_tokens}, timeout={_timeout}s")
@@ -188,11 +194,14 @@ def invoke_with_cleaning(llm_adapter, prompt: str, max_retries: int = 3,
             result_len = len(result) if result else 0
             logging.info(f"[invoke] LLM 返回, 耗时={elapsed:.1f}s, 返回字符数={result_len}")
 
-            print("\n" + "="*50)
-            print(f"LLM 返回的内容 (耗时={elapsed:.1f}s, 字符数={result_len}):")
-            print("-"*50)
-            print(result)
-            print("="*50 + "\n")
+            try:
+                print("\n" + "="*50)
+                print(f"LLM 返回的内容 (耗时={elapsed:.1f}s, 字符数={result_len}):")
+                print("-"*50)
+                print(result)
+                print("="*50 + "\n")
+            except Exception:
+                pass
 
             # 清理结果中的特殊格式标记
             result = result.replace("```", "").strip()

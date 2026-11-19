@@ -1973,7 +1973,8 @@ chapter_outline_single_revise_prompt = _active_prompts["chapter_outline_single_r
 # ============================================================
 # 预设目录
 # ============================================================
-PRESETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
+from app_paths import get_data_subdir
+PRESETS_DIR = get_data_subdir("prompts")
 
 
 def _sync_module_vars():

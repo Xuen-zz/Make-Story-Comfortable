@@ -29,7 +29,11 @@ function doCheck() {
 
 onMounted(async () => {
   await Promise.all([configStore.loadAll(), projectStore.loadActive()])
-  if (configStore.llmChoices.length) llmConfig.value = configStore.llmChoices[0]
+  if (configStore.llmChoices.includes('Gemini 4 Hydrogen (Medium)')) {
+    llmConfig.value = 'Gemini 4 Hydrogen (Medium)'
+  } else if (configStore.llmChoices.length) {
+    llmConfig.value = configStore.llmChoices[0]
+  }
 })
 </script>
 

@@ -67,7 +67,7 @@ const llmForm = ref({
   enable_streaming: true,
 })
 
-const interfaceFormats = ['OpenAI', 'Claude', 'Gemini', 'Ollama', 'Azure']
+const interfaceFormats = ['Codex', 'OpenAI', 'Claude', 'Gemini', 'Ollama', 'Azure', 'Muse']
 
 function loadLLMConfig(name: string) {
   if (!name) return
@@ -194,6 +194,47 @@ async function saveProxy() {
 onMounted(() => {
   configStore.loadAll()
   loadProxy()
+})
+
+// ── 读写分离 · 审校模型配置 ─────────────────────────────────────────────────
+const qgForm = ref({
+  enabled: false,
+  reviewer_engine: 'gemini-4-hydrogen-medium',
+  reviewer_llm_config: 'Gemini 4 Hydrogen (Medium)',
+  codex_model: '',
+  zhuque_enabled: false,
+  zhuque_api_key: '',
+  zhuque_threshold: 20.0,
+})
+const qgTestMsg = ref('')
+
+async function loadQualityGuard() {
+  try {
+    const res = await configApi.getQualityGuard()
+    if (res.data) {
+      qgForm.value = { ...qgForm.value, ...res.data }
+    }
+  } catch (e) {
+    console.error('加载审校配置失败:', e)
+  }
+}
+
+async function saveQualityGuard() {
+  try {
+    const selectedConf = configStore.llmConfigs[qgForm.value.reviewer_llm_config]
+    if (selectedConf?.model_name) {
+      qgForm.value.reviewer_engine = String(selectedConf.model_name)
+    }
+    await configApi.saveQualityGuard(qgForm.value)
+    qgTestMsg.value = '✅ 审校模型配置已保存'
+    statusMsg.value = '✅ 审校模型配置已保存'
+  } catch (e: any) {
+    qgTestMsg.value = `❌ 保存失败: ${e.message}`
+  }
+}
+
+onMounted(() => {
+  loadQualityGuard()
 })
 </script>
 
@@ -402,6 +443,45 @@ onMounted(() => {
             {{ proxySaving ? '保存中...' : '保存代理设置' }}
           </button>
         </div>
+      </div>
+    </div>
+
+  
+    <!-- 读写分离 · 审校模型配置 -->
+    <div class="rounded-xl border border-[var(--color-parchment-darker)] bg-white p-5 space-y-4">
+      <div class="border-b border-[var(--color-parchment-darker)] pb-3">
+        <h2 class="font-semibold text-[var(--color-leather)] flex items-center gap-2">
+          <span>🛡️</span> 读写分离 · 审校与质检模型配置
+        </h2>
+        <p class="text-xs text-[var(--color-ink-light)] mt-0.5">
+          流水线写作阶段使用工坊选定的高速起草模型（默认 Gemini 3.8 Flash Low），Stage 3 审校润色与双语质检自动切换至此处的专用审校模型（默认 Gemini 4 Hydrogen Medium）。
+        </p>
+      </div>
+
+      <div class="space-y-2">
+        <label class="block text-xs text-[var(--color-ink-light)]">专用审校 / 质检 LLM 配置</label>
+        <select
+          v-model="qgForm.reviewer_llm_config"
+          class="w-full max-w-md border border-[var(--color-parchment-darker)] rounded-md px-3 py-2 text-sm bg-white"
+        >
+          <option v-for="c in configStore.llmChoices" :key="c" :value="c">{{ c }}</option>
+        </select>
+        <p class="text-xs text-[var(--color-ink-light)]">
+          当前审校模型 ID：<code class="font-mono bg-[var(--color-parchment)] px-1.5 py-0.5 rounded">{{ configStore.llmConfigs[qgForm.reviewer_llm_config]?.model_name || qgForm.reviewer_engine }}</code>
+        </p>
+      </div>
+
+      <div class="flex items-center justify-between pt-2 border-t border-[var(--color-parchment-darker)]">
+        <div class="text-xs font-medium" :class="qgTestMsg.startsWith('❌') ? 'text-rose-600' : 'text-emerald-700'">
+          {{ qgTestMsg }}
+        </div>
+        <button
+          @click="saveQualityGuard"
+          type="button"
+          class="btn-primary text-xs px-4 py-1.5"
+        >
+          💾 保存审校模型配置
+        </button>
       </div>
     </div>
 

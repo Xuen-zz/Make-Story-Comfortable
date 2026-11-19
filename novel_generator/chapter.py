@@ -680,6 +680,18 @@ def build_chapter_prompt(
     if narrative_instruction:
         prompt = f"\n【叙事风格指导-章节层】\n{narrative_instruction}\n\n" + prompt
 
+    # 注入因果连续性与幕间交接契约（Semantic Handoff）
+    try:
+        from novel_generator.continuity import get_semantic_handoff, format_handoff_for_prompt
+        handoff = get_semantic_handoff(filepath, novel_number)
+        if handoff:
+            handoff_block = format_handoff_for_prompt(handoff)
+            if handoff_block:
+                prompt = handoff_block + prompt
+                logging.info(f"[Prompt组成] 第{novel_number}章 成功注入 Semantic Handoff 因果交接约束")
+    except Exception as e:
+        logging.warning(f"注入 Semantic Handoff 失败: {e}")
+
     prompt_tokens_est = int(len(prompt) * 1.8)
     logging.info(f"[Prompt组成] 第{novel_number}章 最终prompt: "
                  f"总字符={len(prompt)}, 估算tokens≈{prompt_tokens_est}, "
@@ -719,6 +731,10 @@ def generate_chapter_draft(
     scene_by_scene: bool = False,
     progress=None,
     enable_streaming: bool = True,
+    pipeline_mode: str = "fast_zh",
+    inject_summary: bool = True,
+    inject_char_state: bool = True,
+    save_to_disk: bool = True,
 ) -> str:
     """
     生成章节草稿，支持自定义提示词。
@@ -793,11 +809,16 @@ def generate_chapter_draft(
                     word_number=word_number,
                     chapter_outline=chapter_outline,
                     scenes=scenes,
-                    build_prompt_kwargs={},
+                    build_prompt_kwargs={"user_guidance": user_guidance},
                     llm_adapter=llm_adapter,
                     writing_style=writing_style,
                     narrative_instruction=narrative_instruction,
+                    user_guidance=user_guidance,
                     progress=progress,
+                    pipeline_mode=pipeline_mode,
+                    inject_summary=inject_summary,
+                    inject_char_state=inject_char_state,
+                    save_to_disk=save_to_disk,
                 )
             else:
                 logging.info(f"[Draft] Chapter {novel_number}: 细纲仅1个场景，回退到整章生成")
@@ -823,10 +844,11 @@ def generate_chapter_draft(
     logging.info(f"[Draft] Chapter {novel_number}: LLM返回, 内容长度={len(chapter_content) if chapter_content else 0}")
     if not chapter_content.strip():
         logging.warning("Generated chapter draft is empty.")
-    chapter_file = os.path.join(chapters_dir, f"chapter_{novel_number}.txt")
-    clear_file_content(chapter_file)
-    save_string_to_txt(chapter_content, chapter_file)
-    logging.info(f"[Draft] Chapter {novel_number} generated as a draft.")
+    if save_to_disk:
+        chapter_file = os.path.join(chapters_dir, f"chapter_{novel_number}.txt")
+        clear_file_content(chapter_file)
+        save_string_to_txt(chapter_content, chapter_file)
+        logging.info(f"[Draft] Chapter {novel_number} generated as a draft.")
     return chapter_content
 
 
@@ -900,7 +922,12 @@ def generate_chapter_by_scenes(
     llm_adapter,
     writing_style: str = "",
     narrative_instruction: str = "",
+    user_guidance: str = "",
     progress=None,
+    pipeline_mode: str = "fast_zh",
+    inject_summary: bool = True,
+    inject_char_state: bool = True,
+    save_to_disk: bool = True,
 ) -> str:
     """
     按场景逐段生成章节内容。
@@ -918,13 +945,45 @@ def generate_chapter_by_scenes(
                 previous_excerpt = text[-600:] if len(text) > 600 else text
 
     global_summary_file = os.path.join(filepath, "global_summary.txt")
-    global_summary = read_file(global_summary_file).strip() if os.path.exists(global_summary_file) else ""
+    global_summary = read_file(global_summary_file).strip() if (inject_summary and os.path.exists(global_summary_file)) else ""
     character_state_file = os.path.join(filepath, "character_state.txt")
-    character_state = read_file(character_state_file).strip() if os.path.exists(character_state_file) else ""
+    character_state = read_file(character_state_file).strip() if (inject_char_state and os.path.exists(character_state_file)) else ""
 
     total_scenes = len(scenes)
     generated_parts = []
     avg_words = word_number // total_scenes
+
+    # ── 幕间因果交接（Semantic Handoff）与底层规则获取 ──
+    handoff = None
+    handoff_prompt_block = ""
+    worn_phrases_directive = ""
+    try:
+        from novel_generator.continuity import get_semantic_handoff, format_handoff_for_prompt
+        prev_ch = novel_number - 1 if novel_number > 1 else 1
+        handoff = get_semantic_handoff(filepath, prev_ch)
+        if handoff:
+            handoff_prompt_block = format_handoff_for_prompt(handoff)
+            worn = handoff.get("worn_phrases") or []
+            if worn:
+                worn_phrases_directive = f"\n【跨章套路词拦截禁令】：严禁在正文中使用以下套路词句：{', '.join(worn)}\n"
+    except Exception as e:
+        logging.warning(f"[SceneGen] 获取 Handoff 失败: {e}")
+
+    # ── 按模式严格隔离规则：纯中文出稿 vs 出海双语 ──
+    try:
+        if pipeline_mode == "bilingual":
+            from novel_generator.pipeline_rules import get_chapter_generation_rules_prompt, ensure_fixed_terms_file
+            fixed_terms_text = ensure_fixed_terms_file(filepath)
+            adult_mode_flag = bool(build_prompt_kwargs.get("adult_mode", False))
+            pipeline_rules_block = get_chapter_generation_rules_prompt(adult_mode=adult_mode_flag)
+        else:
+            from novel_generator.pipeline_rules import get_zh_chapter_generation_rules_prompt
+            fixed_terms_text = ""
+            pipeline_rules_block = get_zh_chapter_generation_rules_prompt()
+    except Exception as e:
+        logging.warning(f"[SceneGen] 加载规则失败: {e}")
+        fixed_terms_text = ""
+        pipeline_rules_block = ""
 
     for idx, scene in enumerate(scenes):
         scene_num = scene["index"]
@@ -959,6 +1018,12 @@ def generate_chapter_by_scenes(
 
         prompt = f"""你是一位专业小说作家，正在为第{novel_number}章的第{scene_num}个场景撰写正文。
 
+{pipeline_rules_block}
+
+{f"【固定写法表（严格按表一词一译）】：\n{fixed_terms_text}\n" if fixed_terms_text else ""}
+{handoff_prompt_block if idx == 0 and handoff_prompt_block else ""}
+{worn_phrases_directive}
+
 ===== 本章细纲概览 =====
 {chapter_outline}
 
@@ -970,18 +1035,20 @@ def generate_chapter_by_scenes(
 ===== 上下文信息 =====
 前文摘要：{global_summary[:1000] if global_summary else '（无）'}
 角色状态：{character_state[:1000] if character_state else '（无）'}
+{f'\n===== 【强制写作规范与禁忌约束】 =====\n{user_guidance}\n' if user_guidance else ''}
 """
         if previously_generated:
             tail = previously_generated[-1500:] if len(previously_generated) > 1500 else previously_generated
-            prompt += f"\n本章已生成的前序场景（紧接着写，保持连贯）：\n...{tail}\n"
+            prompt += f"\n本章已生成的前序场景（紧接着写，必须从最后一个词紧密咬合接续，严禁重写已有内容）：\n...{tail}\n"
         elif previous_excerpt:
             prompt += f"\n上一章结尾：\n...{previous_excerpt}\n"
 
         prompt += f"""
 ===== 输出要求 =====
-- 本场景目标字数约 {scene_words} 字
+- 本场景目标字数严格控制在 800–1500 字（当前建议约 {scene_words} 字）
+- 续写必须紧接前文最后一个词继续写，绝不得重复前文已写内容
 - 直接输出场景正文，不要输出标题、场景编号或任何说明
-- 紧接前文继续写，保持文风和叙事视角一致
+- 保持文风和叙事视角一致，严格遵循【中文生成十条铁律】
 - 仅输出本场景内容，不要写到下一个场景
 
 请开始撰写："""
@@ -1005,11 +1072,12 @@ def generate_chapter_by_scenes(
     if progress:
         progress(0.95, desc="场景拼合完成，保存中...")
 
-    chapters_dir = os.path.join(filepath, "chapters")
-    os.makedirs(chapters_dir, exist_ok=True)
-    chapter_file = os.path.join(chapters_dir, f"chapter_{novel_number}.txt")
-    clear_file_content(chapter_file)
-    save_string_to_txt(full_chapter, chapter_file)
+    if save_to_disk:
+        chapters_dir = os.path.join(filepath, "chapters")
+        os.makedirs(chapters_dir, exist_ok=True)
+        chapter_file = os.path.join(chapters_dir, f"chapter_{novel_number}.txt")
+        clear_file_content(chapter_file)
+        save_string_to_txt(full_chapter, chapter_file)
 
     logging.info(f"[SceneGen] 第{novel_number}章 共{total_scenes}个场景, 总计{len(full_chapter)}字")
     return full_chapter

@@ -17,7 +17,7 @@ defineProps<{ state: ReturnType<typeof useWorkshopState> }>()
           <input id="batch-inject-world" v-model="state.injectWorldBuilding.value" type="checkbox" class="rounded border-[var(--color-parchment-darker)]" />
           <label for="batch-inject-world" class="text-xs text-[var(--color-ink-light)] select-none whitespace-nowrap">注入世界观</label>
         </div>
-        <button @click="state.doBatchGenerate()" :disabled="state.batch.value.running || !state.llmConfig.value || !state.embConfig.value" class="btn-primary" type="button">
+        <button @click="state.doBatchGenerate()" :disabled="state.batch.value.running || !state.llmConfig.value" class="btn-primary" type="button">
           {{ state.batch.value.running ? '批量生成中…' : '▶ 一键完成小说' }}
         </button>
       </div>

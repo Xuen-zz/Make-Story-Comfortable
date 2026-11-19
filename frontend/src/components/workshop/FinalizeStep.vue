@@ -11,11 +11,12 @@ defineProps<{ state: ReturnType<typeof useWorkshopState> }>()
     <div class="space-y-3">
       <p class="text-sm text-[var(--color-ink-light)]">对第 <strong>{{ state.chapterNum.value }}</strong> 章进行精炼定稿（章节号与步骤3联动）。</p>
       <div class="flex justify-end">
-        <button @click="state.doFinalize()" :disabled="state.finalize.value.running || !state.llmConfig.value || !state.embConfig.value" class="btn-primary" type="button">
+        <button @click="state.doFinalize()" :disabled="state.finalize.value.running || !state.llmConfig.value" class="btn-primary" type="button">
           {{ state.finalize.value.running ? '精炼中…' : '▶ 精炼章节' }}
         </button>
       </div>
       <StreamOutput
+        :key="state.chapterNum.value"
         :progress="state.finalize.value.progress"
         :result="state.finalize.value.result"
         :error="state.finalize.value.error"

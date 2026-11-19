@@ -26,11 +26,14 @@ def get_web_app():
             try:
                 import gradio  # noqa: F401
             except ImportError:
-                import importlib.util
-                stub_path = os.path.join(root, 'gradio_stub.py')
-                spec = importlib.util.spec_from_file_location('gradio', stub_path)
-                stub = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(stub)
+                try:
+                    import gradio_stub as stub
+                except ImportError:
+                    import importlib.util
+                    stub_path = os.path.join(root, 'gradio_stub.py')
+                    spec = importlib.util.spec_from_file_location('gradio', stub_path)
+                    stub = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(stub)
                 sys.modules['gradio'] = stub
 
         from web_server import NovelGeneratorWeb

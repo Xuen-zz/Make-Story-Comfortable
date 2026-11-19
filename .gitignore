@@ -1,12 +1,43 @@
+# Python & Build
 __pycache__/
 *.pyc
 *.pyo
-node_modules/
+*.pyd
+*.spec~
+build/
 dist/
+backend_dist/
+*.egg-info/
+
+# Frontend & Desktop Electron Build
+node_modules/
+frontend/dist/
+desktop/node_modules/
+desktop/dist/
+desktop/release/
+desktop/resources/
+*.exe
+*.dmg
+*.AppImage
+*.blockmap
+
+# Secrets, Local Config & User Novel Data (严禁上传隐私密钥与小说稿件)
 .env
-*.log
-prompt_history.jsonl
+config.json
+providers.json
+projects.json
+workflow_store.json
+user_profile.json
+xp_presets.json
 output/
 vectorstore/
+
+# Logs & Runtime Files
+*.log
+*.jsonl
+prompt_log.txt
+
+# Tools & OS
 .claude/
 .DS_Store
+Thumbs.db

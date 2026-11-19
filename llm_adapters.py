@@ -667,10 +667,224 @@ class GrokAdapter(BaseLLMAdapter):
             self.max_tokens, self.temperature, self.timeout
         )
 
+
+class MuseAdapter(BaseLLMAdapter):
+    """
+    基于 muse-cli 的 Meta Muse 个人 AI Agent 适配器。
+    专门用于长篇小说高质量文学渲染与正文撰写。
+    """
+    def __init__(self, session_id: Optional[str] = None, timeout: int = 180):
+        self.session_id = session_id
+        self.timeout = timeout or 180
+        self.model_name = "Meta-Muse"
+        self.last_reasoning = ""
+
+    def invoke(self, prompt: str, system_message: str = "") -> str:
+        import time
+        import os
+        import logging
+        from muse_cli.cli import connect, load_config
+
+        if "MUSE_PROXY" not in os.environ and "ALL_PROXY" not in os.environ:
+            os.environ["MUSE_PROXY"] = "socks5h://127.0.0.1:7897"
+
+        combined = f"System Instructions:\n{system_message}\n\nUser Request:\n{prompt}" if system_message else prompt
+        cfg = load_config()
+        gw = connect(cfg)
+
+        params = {
+            "items": [{"type": "text", "text": combined}],
+            "node_id": cfg["node_id"],
+            "capabilities": {},
+        }
+        if self.session_id:
+            params["session_id"] = self.session_id
+
+        scope = {"session_id": self.session_id} if self.session_id else {}
+        baseline = 0
+        try:
+            h = gw.call_json("chat.history", body={"limit": 5, **scope})
+            evs = h.get("chat_events", [])
+            if evs:
+                baseline = max(e.get("seq", 0) for e in evs)
+        except Exception:
+            pass
+
+        gw._open("chat.stream", body=params)
+
+        deadline = time.time() + self.timeout
+        while time.time() < deadline:
+            time.sleep(2)
+            try:
+                h = gw.call_json("chat.history", body={"limit": 10, **scope})
+                evs = sorted(h.get("chat_events", []), key=lambda e: e.get("seq", 0))
+                for ev in evs:
+                    if ev.get("seq", 0) > baseline:
+                        payload = ev.get("payload", {})
+                        if payload.get("role") == "assistant" or ev.get("role") == "assistant" or ev.get("event_name") == "message.assistant":
+                            text = payload.get("display_text") or payload.get("content") or ev.get("display_text")
+                            if text:
+                                return text
+            except Exception as e:
+                logging.warning(f"[MuseAdapter] Polling error: {e}")
+                continue
+
+        raise TimeoutError(f"Muse did not respond within {self.timeout} seconds")
+
+    def invoke_stream(self, prompt: str, system_message: str = ""):
+        result = self.invoke(prompt, system_message=system_message)
+        if result:
+            yield result
+
+class AgyCodexAdapter(BaseLLMAdapter):
+    """
+    基于本地 Antigravity / Codex 官方 CLI 引擎的大模型适配器。
+    完全免密、无需第三方 API Key 与网络代理，直接使用本地环境模型。
+    """
+    def __init__(self, model_name: str = "gemini-3.8-flash-low", timeout: int = 180):
+        self.model_name = model_name or "gemini-3.8-flash-low"
+        self.timeout = timeout or 180
+        self.last_reasoning = ""
+        self.agy_path = self._find_agy()
+
+    def _find_agy(self) -> str:
+        import shutil, os
+        p = shutil.which("agy")
+        if p and os.path.exists(p):
+            return p
+        local_app = os.path.expandvars(r"%LOCALAPPDATA%\agy\bin\agy.exe")
+        if os.path.exists(local_app):
+            return local_app
+        return "agy"
+
+    def invoke_stream(self, prompt: str, system_message: str = ""):
+        import subprocess, json, os, tempfile
+
+        # 核心约束：强制作为文学创作与对话模型，禁止 agy CLI 尝试调用命令行/写文件等工具
+        no_tools_instruction = "【系统核心约束：你是专业文学创作与双语本地化翻译助手。严禁尝试调用任何工具、执行命令或访问文件系统，必须直接输出纯文本回答。】\n\n"
+        combined = f"{no_tools_instruction}{system_message}\n\n{prompt}" if system_message else f"{no_tools_instruction}{prompt}"
+
+        cmd = [
+            self.agy_path,
+            "--input-format", "stream-json",
+            "--output-format", "stream-json",
+            "--disable-slash-commands",
+            "--dangerously-skip-permissions"
+        ]
+        clean_model = (self.model_name or "").strip()
+        if clean_model and clean_model.lower() not in ("default", "auto", "codex", "内置模型", "codex 内置模型", "codex/antigravity"):
+            cmd.extend(["--model", clean_model])
+
+        try:
+            # 在临时目录运行，隔离工作区，防止 agy 尝试解析代码仓库或运行命令
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                cwd=tempfile.gettempdir()
+            )
+        except Exception as e:
+            raise RuntimeError(f"启动本地 Codex/Antigravity 引擎失败 ({self.agy_path}): {e}")
+
+        payload = json.dumps({"event": "user", "message": {"content": combined}}, ensure_ascii=False)
+        try:
+            proc.stdin.write(payload + "\n")
+            proc.stdin.flush()
+            proc.stdin.close()
+        except Exception as e:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            raise RuntimeError(f"向本地 Codex/Antigravity 引擎下发提示词失败: {e}")
+
+        full_chunks = []
+        last_error = ""
+        try:
+            while True:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except Exception:
+                    continue
+
+                event = data.get("event")
+                if event == "step_update":
+                    update = data.get("step_update", {})
+                    step_type = update.get("step_type")
+                    if step_type == "agent_response":
+                        delta = update.get("text_delta") or update.get("content")
+                        if delta:
+                            full_chunks.append(delta)
+                            yield delta
+                    elif step_type == "error":
+                        last_error = update.get("error") or update.get("message") or str(update)
+                        logging.warning(f"[AgyCodexAdapter] step_type error: {last_error}")
+                elif event == "error":
+                    last_error = data.get("error", {}).get("message") or str(data.get("error"))
+                    logging.warning(f"[AgyCodexAdapter] event error: {last_error}")
+                elif event == "result":
+                    res = data.get("result", {})
+                    if not full_chunks:
+                        resp = res.get("response") or res.get("content") or ""
+                        if resp:
+                            full_chunks.append(resp)
+                            yield resp
+                        elif res.get("status") and res.get("status") != "SUCCESS":
+                            last_error = res.get("error") or f"status={res.get('status')}"
+                    break
+
+            if not full_chunks:
+                try:
+                    stderr_txt = proc.stderr.read().strip()
+                except Exception:
+                    stderr_txt = ""
+                err_detail = last_error or stderr_txt or f"退出码={proc.poll()}"
+                logging.error(f"[AgyCodexAdapter] 未收到有效模型回复，详情: {err_detail}")
+        finally:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+
+    def invoke(self, prompt: str, system_message: str = "") -> str:
+        return "".join(list(self.invoke_stream(prompt, system_message=system_message)))
+
+    def invoke_chat_stream(self, messages: list):
+        """流式多轮对话支持：完整保留并格式化对话上下文历史与角色指令"""
+        system_parts = []
+        dialogue_history = []
+        for m in messages:
+            role = m.get("role")
+            content = m.get("content", "")
+            if not content:
+                continue
+            if role == "system":
+                system_parts.append(content)
+            elif role == "user":
+                dialogue_history.append(f"【用户】：\n{content}")
+            elif role == "assistant":
+                dialogue_history.append(f"【AI顾问】：\n{content}")
+
+        system_text = "\n\n".join(system_parts)
+        history_text = "\n\n".join(dialogue_history)
+        combined = f"{system_text}\n\n=== 对话历史与当前提问 ===\n\n{history_text}\n\n请针对用户的最新提问，直接给出你的建议和回复："
+        yield from self.invoke_stream(combined, system_message="")
+
+
 def _apply_proxy_settings():
     """读取 config.json 中的代理设置，注入到环境变量中供 httpx/requests/openai 使用。"""
     import os, json
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    from app_paths import get_data_file
+    config_path = get_data_file("config.json")
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
@@ -678,7 +892,7 @@ def _apply_proxy_settings():
         if proxy_cfg.get("enabled") and proxy_cfg.get("proxy_url"):
             proxy_url = proxy_cfg["proxy_url"].strip()
             proxy_port = str(proxy_cfg.get("proxy_port", "")).strip()
-            if not proxy_url.startswith("http"):
+            if not any(proxy_url.startswith(p) for p in ("http://", "https://", "socks5://", "socks5h://")):
                 proxy_url = "http://" + proxy_url
             if proxy_port:
                 proxy_url = proxy_url.rstrip("/") + ":" + proxy_port
@@ -732,5 +946,13 @@ def create_llm_adapter(
         return SiliconFlowAdapter(api_key, base_url, model_name, max_tokens, temperature, timeout, enable_thinking, thinking_budget)
     elif fmt == "grok":
         return GrokAdapter(api_key, base_url, model_name, max_tokens, temperature, timeout)
+    elif fmt in ("codex", "agy", "antigravity", "local", "内置模型", "codex/antigravity", "codex 内置模型"):
+        clean_model = model_name if (model_name and model_name not in ("auto", "default")) else "gemini-3.8-flash-low"
+        return AgyCodexAdapter(model_name=clean_model, timeout=timeout or 180)
+    elif fmt in ("muse", "meta muse", "muse.ai"):
+        session_id = None
+        if model_name and len(model_name) >= 30 and "-" in model_name:
+            session_id = model_name
+        return MuseAdapter(session_id=session_id, timeout=timeout or 180)
     else:
         raise ValueError(f"Unknown interface_format: {interface_format}")

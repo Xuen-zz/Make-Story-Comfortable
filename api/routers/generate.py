@@ -553,6 +553,154 @@ def list_chapters(filepath: str = "./output"):
     return {"chapters": result}
 
 
+@router.get("/generate/dashboard")
+def get_project_dashboard(filepath: str = "./output"):
+    arch_file = os.path.join(filepath, "Novel_architecture.txt")
+    bp_file = os.path.join(filepath, "Novel_directory.txt")
+    outline_file = os.path.join(filepath, "Novel_detailed_outline.txt")
+    summary_file = os.path.join(filepath, "global_summary.txt")
+    char_state_file = os.path.join(filepath, "character_state.txt")
+    chapters_dir = os.path.join(filepath, "chapters")
+    en_dir = os.path.join(filepath, "chapters_en")
+
+    # 1. 蓝图标题
+    bp_titles = {}
+    if os.path.exists(bp_file):
+        try:
+            bp_content = read_file(bp_file)
+            for m in re.finditer(r'第\s*(\d+)\s*章[：:\s\-—]+([^\r\n]+)', bp_content):
+                bp_titles[int(m.group(1))] = m.group(2).strip()
+        except Exception:
+            pass
+
+    # 2. 细纲章节
+    outline_chapters = set()
+    if os.path.exists(outline_file):
+        try:
+            ot_content = read_file(outline_file)
+            for m in re.finditer(r'【第\s*(\d+)\s*章细纲】([^\r\n]+)', ot_content):
+                num = int(m.group(1))
+                outline_chapters.add(num)
+                if num not in bp_titles:
+                    bp_titles[num] = m.group(2).strip()
+        except Exception:
+            pass
+
+    # 英文目录检测
+    en_titles = {}
+    en_json_file = os.path.join(filepath, "Novel_directory_en.json")
+    en_txt_file = os.path.join(filepath, "Novel_directory_en.txt")
+    if os.path.exists(en_json_file):
+        try:
+            import json as _json
+            with open(en_json_file, 'r', encoding='utf-8') as _f:
+                _en_data = _json.load(_f)
+                for _item in _en_data:
+                    en_titles[_item.get("num")] = _item.get("title_en", "")
+        except Exception:
+            pass
+    elif os.path.exists(en_txt_file):
+        try:
+            _txt_c = read_file(en_txt_file)
+            for _m in re.finditer(r'Chapter\s*(\d+)[：:\s\-—]+([^|\r\n]+)', _txt_c):
+                en_titles[int(_m.group(1))] = f"Chapter {_m.group(1)}: {_m.group(2).strip()}"
+        except Exception:
+            pass
+
+    # 资产状态
+    assets = {
+        "architecture": {
+            "exists": os.path.exists(arch_file),
+            "chars": len(read_file(arch_file)) if os.path.exists(arch_file) else 0,
+            "label": "小说完整架构",
+            "file": "Novel_architecture.txt",
+        },
+        "blueprint": {
+            "exists": os.path.exists(bp_file),
+            "total_chapters": len(bp_titles),
+            "chars": len(read_file(bp_file)) if os.path.exists(bp_file) else 0,
+            "label": "全书蓝图目录",
+            "file": "Novel_directory.txt",
+        },
+        "directory_en": {
+            "exists": os.path.exists(en_json_file) or os.path.exists(en_txt_file),
+            "total_chapters": len(en_titles),
+            "chars": len(read_file(en_txt_file)) if os.path.exists(en_txt_file) else 0,
+            "label": "全书英文目录",
+            "file": "Novel_directory_en.txt",
+        },
+        "detailed_outline": {
+            "exists": os.path.exists(outline_file),
+            "planned_chapters": len(outline_chapters),
+            "chars": len(read_file(outline_file)) if os.path.exists(outline_file) else 0,
+            "label": "章节精细细纲",
+            "file": "Novel_detailed_outline.txt",
+        },
+        "global_summary": {
+            "exists": bool(read_file(summary_file).strip()) if os.path.exists(summary_file) else False,
+            "chars": len(read_file(summary_file).strip()) if os.path.exists(summary_file) else 0,
+            "label": "全局前文记忆",
+            "file": "global_summary.txt",
+        },
+        "character_state": {
+            "exists": bool(read_file(char_state_file).strip()) if os.path.exists(char_state_file) else False,
+            "chars": len(read_file(char_state_file).strip()) if os.path.exists(char_state_file) else 0,
+            "label": "角色能力状态库",
+            "file": "character_state.txt",
+        },
+    }
+
+    # 3. 收集所有章节
+    all_nums = set()
+    if os.path.exists(chapters_dir):
+        for f in glob.glob(os.path.join(chapters_dir, "chapter_*.txt")):
+            m = re.search(r'chapter_(\d+)', os.path.basename(f))
+            if m:
+                all_nums.add(int(m.group(1)))
+    all_nums.update(bp_titles.keys())
+    all_nums.update(outline_chapters)
+    if not all_nums:
+        all_nums.add(1)
+
+    chapters_list = []
+    for num in sorted(all_nums):
+        draft_file = os.path.join(chapters_dir, f"chapter_{num}_draft.txt")
+        final_file = os.path.join(chapters_dir, f"chapter_{num}.txt")
+        en_file = os.path.join(en_dir, f"chapter_{num}_en.txt")
+
+        has_final = os.path.exists(final_file)
+        has_draft = os.path.exists(draft_file)
+        ch_file_to_read = final_file if has_final else (draft_file if has_draft else None)
+        ch_content = read_file(ch_file_to_read) if ch_file_to_read else ""
+        ch_chars = len(ch_content.strip()) if ch_content else 0
+
+        has_en = os.path.exists(en_file)
+        en_content = read_file(en_file).strip() if has_en else ""
+        en_words = len(en_content.split()) if en_content else 0
+
+        title = bp_titles.get(num, f"第 {num} 章")
+        title_en = en_titles.get(num, "")
+
+        chapters_list.append({
+            "num": num,
+            "title": title,
+            "title_en": title_en,
+            "has_draft": bool(ch_chars > 0),
+            "chars": ch_chars,
+            "has_final": has_final,
+            "has_en": has_en,
+            "en_words": en_words,
+            "has_outline": (num in outline_chapters),
+        })
+
+    return {
+        "project_name": os.path.basename(os.path.normpath(filepath)),
+        "filepath": filepath,
+        "assets": assets,
+        "chapters": chapters_list,
+    }
+
+
 # ── 精炼章节 ──────────────────────────────────────────────────────────────────
 
 @router.post("/generate/finalize")
@@ -617,6 +765,337 @@ def batch_humanize(body: BatchHumanizerRequest):
             body.llm_config_name, body.filepath,
             body.start_chapter, body.end_chapter,
             body.enable_r8, body.user_focus, body.depth,
+        ):
+            yield chunk
+
+    return _sse_response(_gen())
+
+
+class TranslateChapterRequest(_BaseModel):
+    llm_config_name: str
+    filepath: str = "./output"
+    chapter_num: int
+    target_style: str = "Alpha Romance (GoodNovel / Dreame 爆款标准)"
+    custom_guidance: str = ""
+
+
+@router.post("/generate/translate")
+def translate_chapter(body: TranslateChapterRequest):
+    app = get_web_app()
+
+    async def _gen():
+        async for chunk in run_with_sse(
+            app.translate_chapter_web,
+            body.llm_config_name, body.filepath, body.chapter_num,
+            body.target_style, body.custom_guidance,
+        ):
+            yield chunk
+
+    return _sse_response(_gen())
+
+
+@router.get("/generate/chapter_en/{num}")
+def get_chapter_en(num: int, filepath: str = "./output"):
+    en_file = os.path.join(filepath, "chapters_en", f"chapter_{num}_en.txt")
+    if not os.path.exists(en_file):
+        raise HTTPException(status_code=404, detail=f"未找到第 {num} 章英文文件")
+    return {"content": read_file(en_file), "chapter_num": num}
+
+
+@router.put("/generate/chapter_en/{num}")
+def save_chapter_en(num: int, body: SaveChapterRequest, filepath: str = "./output"):
+    en_dir = os.path.join(filepath, "chapters_en")
+    os.makedirs(en_dir, exist_ok=True)
+    en_file = os.path.join(en_dir, f"chapter_{num}_en.txt")
+    save_string_to_txt(body.content, en_file)
+    return {"message": f"✅ 第 {num} 章英文译文已保存至 {en_file}"}
+
+@router.get("/generate/chapter_artifacts/{num}")
+def get_chapter_artifacts(num: int, filepath: str = "./output"):
+    """获取指定章节的全套流水线产物快照（草稿、润色、修改清单、英文译稿、全书摘要与角色状态等）"""
+    chapters_dir = os.path.join(filepath, "chapters")
+    en_dir = os.path.join(filepath, "chapters_en")
+
+    raw_draft_path = os.path.join(chapters_dir, f"chapter_{num}_raw_draft.txt")
+    polished_path = os.path.join(chapters_dir, f"chapter_{num}.txt")
+    checklist_path = os.path.join(chapters_dir, f"chapter_{num}_polish_checklist.txt")
+    en_path = os.path.join(en_dir, f"chapter_{num}_en.txt")
+    summary_path = os.path.join(filepath, "global_summary.txt")
+    char_state_path = os.path.join(filepath, "character_state.txt")
+
+    raw_draft = read_file(raw_draft_path) if os.path.exists(raw_draft_path) else ""
+    polished = read_file(polished_path) if os.path.exists(polished_path) else ""
+    checklist = read_file(checklist_path) if os.path.exists(checklist_path) else ""
+    en_text = read_file(en_path) if os.path.exists(en_path) else ""
+    summary = read_file(summary_path) if os.path.exists(summary_path) else ""
+    char_state = read_file(char_state_path) if os.path.exists(char_state_path) else ""
+
+    return {
+        "chapter_num": num,
+        "draft": raw_draft or polished,
+        "polished": polished,
+        "checklist": checklist,
+        "translation": en_text,
+        "summary": summary,
+        "character_state": char_state,
+        "has_en": bool(en_text),
+        "has_polished": bool(polished),
+    }
+
+
+class SaveDirectoryEnRequest(_BaseModel):
+    filepath: str = "./output"
+    chapters: list = []
+    raw_text: str = ""
+
+
+class TranslateDirectoryRequest(_BaseModel):
+    llm_config_name: str
+    filepath: str = "./output"
+    target_style: str = "Alpha Romance (GoodNovel / Dreame 爆款标准)"
+    custom_guidance: str = ""
+
+
+@router.get("/generate/directory_en")
+def get_directory_en(filepath: str = "./output"):
+    import json
+    json_path = os.path.join(filepath, "Novel_directory_en.json")
+    txt_path = os.path.join(filepath, "Novel_directory_en.txt")
+    zh_path = os.path.join(filepath, "Novel_directory.txt")
+
+    chapters = []
+    raw_text = ""
+    if os.path.exists(json_path):
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                chapters = json.load(f)
+        except Exception:
+            pass
+
+    if os.path.exists(txt_path):
+        try:
+            raw_text = read_file(txt_path)
+        except Exception:
+            pass
+
+    # 若尚未生成英文目录，从中文蓝图目录自动解析出章节骨架
+    if not chapters and os.path.exists(zh_path):
+        try:
+            zh_content = read_file(zh_path)
+            for m in re.finditer(r'第\s*(\d+)\s*章[：:\s\-—]+([^\r\n]+)', zh_content):
+                cnum = int(m.group(1))
+                ctitle = m.group(2).strip()
+                chapters.append({
+                    "num": cnum,
+                    "title_zh": ctitle,
+                    "title_en": f"Chapter {cnum}: {ctitle}",
+                    "title_en_clean": ctitle,
+                    "summary": ""
+                })
+        except Exception:
+            pass
+
+    return {
+        "chapters": chapters,
+        "raw_text": raw_text
+    }
+
+
+@router.put("/generate/directory_en")
+def save_directory_en(body: SaveDirectoryEnRequest):
+    import json
+    filepath = body.filepath
+    os.makedirs(filepath, exist_ok=True)
+    json_path = os.path.join(filepath, "Novel_directory_en.json")
+    txt_path = os.path.join(filepath, "Novel_directory_en.txt")
+
+    if body.chapters:
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(body.chapters, f, ensure_ascii=False, indent=2)
+
+        lines = []
+        for ch in body.chapters:
+            num = ch.get("num", 0)
+            en = ch.get("title_en", f"Chapter {num}")
+            zh = ch.get("title_zh", "")
+            lines.append(f"{en} | {zh}")
+        raw_text = "\n".join(lines) + "\n"
+        save_string_to_txt(raw_text, txt_path)
+    elif body.raw_text:
+        save_string_to_txt(body.raw_text, txt_path)
+
+    return {"message": "✅ 全书英文章名目录已成功保存！"}
+
+
+@router.post("/generate/translate_directory")
+def translate_directory(body: TranslateDirectoryRequest):
+    app = get_web_app()
+
+    async def _gen():
+        async for chunk in run_with_sse(
+            app.translate_directory_web,
+            body.llm_config_name, body.filepath,
+            body.target_style, body.custom_guidance,
+        ):
+            yield chunk
+
+    return _sse_response(_gen())
+
+
+class AuditTranslationRequest(_BaseModel):
+    llm_config_name: str
+    filepath: str = "./output"
+    chapter_num: int
+
+
+@router.post("/generate/audit_translation")
+def audit_translation(body: AuditTranslationRequest):
+    app = get_web_app()
+
+    async def _gen():
+        async for chunk in run_with_sse(
+            app.audit_translation_web,
+            body.llm_config_name, body.filepath, body.chapter_num
+        ):
+            yield chunk
+
+    return _sse_response(_gen())
+
+
+class PipelineChapterRequest(_BaseModel):
+    llm_config_name: str
+    emb_config_name: str = ""
+    filepath: str = "./output"
+    chapter_num: int
+    word_number: int = 3000
+    user_guidance: str = ""
+    characters_involved: str = ""
+    key_items: str = ""
+    scene_location: str = ""
+    time_constraint: str = ""
+    style_name: str = ""
+    narrative_style_name: str = ""
+    xp_type: str = ""
+    target_style: str = "Alpha Romance (GoodNovel / Dreame 爆款标准)"
+    auto_retry_translation: bool = True
+    scene_by_scene: bool = True
+    pipeline_mode: str = "fast_zh"
+    review_strength: str = "strong"
+    inject_world_building: bool = True
+    inject_summary: bool = True
+    inject_char_state: bool = True
+    inject_canon: bool = True
+
+
+@router.get("/generate/chapter_context_preview")
+def get_chapter_context_preview(chapter_num: int, filepath: str = "./output"):
+    """预览某章流水线执行前将注入的所有上下游上下文依赖（透明化输入展示）。"""
+    import json as _json
+    bp_file = os.path.join(filepath, "Novel_directory.txt")
+    outline_file = os.path.join(filepath, "Novel_detailed_outline.txt")
+    summary_file = os.path.join(filepath, "global_summary.txt")
+    canon_file = os.path.join(filepath, "Novel_canon_history.txt")
+
+    bp_info = {}
+    bp_raw_text = ""
+    if os.path.exists(bp_file):
+        try:
+            from novel_generator.blueprint import get_chapter_info_from_blueprint
+            bp_info = get_chapter_info_from_blueprint(read_file(bp_file), chapter_num) or {}
+            if bp_info:
+                parts = []
+                if bp_info.get("chapter_title"):
+                    parts.append(f"标题：{bp_info.get('chapter_title')}")
+                if bp_info.get("chapter_role"):
+                    parts.append(f"定位：{bp_info.get('chapter_role')}")
+                if bp_info.get("chapter_purpose"):
+                    parts.append(f"作用：{bp_info.get('chapter_purpose')}")
+                if bp_info.get("characters_involved"):
+                    parts.append(f"出场人物：{bp_info.get('characters_involved')}")
+                if bp_info.get("chapter_summary"):
+                    parts.append(f"章节梗概：{bp_info.get('chapter_summary')}")
+                bp_raw_text = "\n".join(parts)
+        except Exception:
+            pass
+
+    outline_text = ""
+    if os.path.exists(outline_file):
+        try:
+            from novel_generator.detailed_outline import get_chapter_outline
+            outline_text = (get_chapter_outline(read_file(outline_file), chapter_num) or "").strip()
+        except Exception:
+            pass
+
+    summary_text = read_file(summary_file).strip() if os.path.exists(summary_file) else ""
+    char_state_text = (read_character_state(filepath) or "").strip()
+    world_text = (read_world_building(filepath) or "").strip()
+    canon_text = read_file(canon_file).strip() if os.path.exists(canon_file) else ""
+
+    handoff_text = ""
+    handoff_dict = None
+    if chapter_num > 1:
+        try:
+            from novel_generator.continuity import get_semantic_handoff
+            h_obj = get_semantic_handoff(filepath, chapter_num - 1)
+            if h_obj:
+                handoff_dict = h_obj.to_dict()
+                handoff_text = _json.dumps(handoff_dict, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _pack(label: str, content: str):
+        c = content or ""
+        return {
+            "label": label,
+            "exists": bool(c.strip()),
+            "chars": len(c),
+            "content": c,
+        }
+
+    return {
+        "chapter_num": chapter_num,
+        "blueprint_info": bp_info,
+        "items": {
+            "blueprint": _pack("目录简纲", bp_raw_text),
+            "outline": _pack("本章细纲", outline_text),
+            "handoff": {**_pack("上章因果交接 (Handoff)", handoff_text), "data": handoff_dict},
+            "global_summary": _pack("前文全局摘要", summary_text),
+            "character_state": _pack("角色能力与状态表", char_state_text),
+            "world_building": _pack("世界观与设定", world_text),
+            "canon_history": _pack("已发生正史约束", canon_text),
+        },
+    }
+
+
+@router.post("/generate/pipeline_chapter")
+def pipeline_chapter(body: PipelineChapterRequest):
+    app = get_web_app()
+
+    async def _gen():
+        async for chunk in run_with_sse(
+            app.pipeline_chapter_web,
+            body.llm_config_name,
+            body.emb_config_name,
+            body.filepath,
+            body.chapter_num,
+            body.word_number,
+            body.user_guidance,
+            body.characters_involved,
+            body.key_items,
+            body.scene_location,
+            body.time_constraint,
+            body.style_name if body.style_name and body.style_name != "不使用文风" else None,
+            body.narrative_style_name if body.narrative_style_name and body.narrative_style_name != "不使用文风" else None,
+            body.xp_type,
+            body.target_style,
+            body.auto_retry_translation,
+            body.scene_by_scene,
+            body.pipeline_mode,
+            body.review_strength,
+            body.inject_world_building,
+            body.inject_summary,
+            body.inject_char_state,
+            body.inject_canon,
         ):
             yield chunk
 
@@ -888,3 +1367,201 @@ def export_novel(filepath: str = "./output"):
             "Content-Disposition": "attachment; filename=novel_export.txt",
         },
     )
+
+
+class UpdateCanonHistoryRequest(_BaseModel):
+    llm_config_name: str
+    filepath: str
+    chapter_num: int
+
+
+@router.get("/generate/canon_history")
+def get_canon_history(filepath: str):
+    """读取当前项目的正史设定页、正史规则与更新记录"""
+    canon_file = os.path.join(filepath, "Novel_canon_history.txt")
+    rules_file = os.path.join(filepath, "Novel_canon_rules.txt")
+    changelog_file = os.path.join(filepath, "Novel_canon_changelog.txt")
+    canon = read_file(canon_file) if os.path.exists(canon_file) else ""
+    rules = read_file(rules_file) if os.path.exists(rules_file) else ""
+    changelog = read_file(changelog_file) if os.path.exists(changelog_file) else ""
+    return {"canon": canon, "rules": rules, "changelog": changelog}
+
+
+@router.post("/generate/update_canon_history")
+def update_canon_history_api(body: UpdateCanonHistoryRequest):
+    """依据本章定稿与正史规则手动触发正史设定页演进更新"""
+    app = get_web_app()
+    result = app.update_canon_history_web(
+        llm_config_name=body.llm_config_name,
+        filepath=body.filepath,
+        chapter_num=body.chapter_num
+    )
+    return {"result": result}
+
+
+# ── 因果连续性与幕间交接（Semantic Handoff & Continuity Engine）路由 ──
+
+class ColdStartBackfillRequest(_BaseModel):
+    llm_config_name: str
+    filepath: str
+    max_chapters: int = None
+
+
+class PreWriteGateRequest(_BaseModel):
+    llm_config_name: str
+    filepath: str
+    chapter_num: int
+
+
+class SpanRepairRequest(_BaseModel):
+    llm_config_name: str
+    filepath: str
+    chapter_num: int
+    target_span: str
+    repair_instruction: str
+
+
+@router.get("/generate/handoff")
+def get_handoff_api(filepath: str, chapter_num: int):
+    """获取第 chapter_num 章的幕间因果交接数据（Handoff）"""
+    from novel_generator.continuity import get_semantic_handoff
+    handoff = get_semantic_handoff(filepath, int(chapter_num))
+    return {"handoff": handoff}
+
+
+@router.post("/generate/cold_start_backfill")
+def cold_start_backfill_api(body: ColdStartBackfillRequest):
+    """一键从前文历史章节冷启动萃取正史底册与因果交接（解决中途接入割裂感）"""
+    app = get_web_app()
+    res = app.cold_start_backfill_web(
+        llm_config_name=body.llm_config_name,
+        filepath=body.filepath,
+        max_chapters=body.max_chapters
+    )
+    return res
+
+
+@router.post("/generate/pre_write_gate")
+def pre_write_gate_api(body: PreWriteGateRequest):
+    """大纲级前置因果门禁体检（动笔前低成本拦截冲突）"""
+    app = get_web_app()
+    res = app.pre_write_gate_web(
+        llm_config_name=body.llm_config_name,
+        filepath=body.filepath,
+        chapter_num=body.chapter_num
+    )
+    return res
+
+
+@router.post("/generate/span_repair")
+def span_repair_api(body: SpanRepairRequest):
+    """局部句子级精准修补（无需推翻整章，单点替换）"""
+    app = get_web_app()
+    res = app.repair_span_web(
+        llm_config_name=body.llm_config_name,
+        filepath=body.filepath,
+        chapter_num=body.chapter_num,
+        target_span=body.target_span,
+        repair_instruction=body.repair_instruction
+    )
+    return res
+
+
+# ── 小说流水线底层规则与固定写法表路由 ──
+
+class SaveFixedTermsRequest(_BaseModel):
+    filepath: str
+    content: str
+
+
+class ScriptAuditRequest(_BaseModel):
+    text_zh: str = ""
+    text_en: str = ""
+
+
+@router.get("/generate/fixed_terms")
+def get_fixed_terms_api(filepath: str):
+    """获取项目的固定写法表内容"""
+    from novel_generator.pipeline_rules import ensure_fixed_terms_file
+    content = ensure_fixed_terms_file(filepath)
+    return {"content": content}
+
+
+@router.post("/generate/fixed_terms")
+def save_fixed_terms_api(body: SaveFixedTermsRequest):
+    """保存项目的固定写法表内容"""
+    from novel_generator.pipeline_rules import get_fixed_terms_file_path
+    p = get_fixed_terms_file_path(body.filepath)
+    save_string_to_txt(body.content, p)
+    return {"success": True, "message": "固定写法表已保存"}
+
+
+@router.get("/generate/pipeline_rules")
+def get_pipeline_rules_api():
+    """获取小说流水线底层规则全文"""
+    from novel_generator.pipeline_rules import PIPELINE_RULES_RAW
+    return {"rules": PIPELINE_RULES_RAW}
+
+
+@router.post("/generate/script_audit")
+def run_script_audit_api(body: ScriptAuditRequest):
+    """直接运行确定性脚本规则检测器（统计禁用词、否定排比、修仙外溢、标签等）"""
+    from novel_generator.pipeline_rules import DeterministicRuleChecker
+    report = DeterministicRuleChecker.run_full_script_audit(text_zh=body.text_zh, text_en=body.text_en)
+    text_summary = DeterministicRuleChecker.format_script_report_as_text(report)
+    return {"report": report, "summary": text_summary}
+
+# ── 章节留底档案与全书规则迭代白皮书 ──────────────────────────────────────────
+
+class _AuditBackfillReq(_BaseModel):
+    filepath: str
+
+
+@router.get("/generate/audit_trail")
+def get_chapter_audit(filepath: str, chapter_num: int):
+    """获取单章全链路生成与质量留底档案"""
+    import json as _json
+    audit_file = os.path.join(filepath, "audit_trails", f"chapter_{chapter_num}_audit.json")
+    md_file = os.path.join(filepath, "audit_trails", f"chapter_{chapter_num}_audit.md")
+    if not os.path.exists(audit_file):
+        return {"exists": False, "chapter_num": chapter_num, "message": "暂无该章留底档案"}
+    try:
+        with open(audit_file, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+        md_text = ""
+        if os.path.exists(md_file):
+            with open(md_file, "r", encoding="utf-8") as mf:
+                md_text = mf.read()
+        zhuque_file = os.path.join(filepath, "audit_trails", f"chapter_{chapter_num}_zhuque_report.md")
+        zhuque_md = ""
+        if os.path.exists(zhuque_file):
+            with open(zhuque_file, "r", encoding="utf-8") as zf:
+                zhuque_md = zf.read()
+        return {"exists": True, "data": data, "markdown": md_text, "zhuque_report": zhuque_md}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/generate/book_audit_whitepaper")
+def get_book_audit_whitepaper(filepath: str):
+    """获取全书生成留底总账本与规则迭代白皮书"""
+    import json as _json
+    from novel_generator.audit_tracker import generate_book_iteration_report
+    index_file = os.path.join(filepath, "audit_trails", "book_audit_index.json")
+    index_data = {}
+    if os.path.exists(index_file):
+        try:
+            with open(index_file, "r", encoding="utf-8") as f:
+                index_data = _json.load(f)
+        except Exception:
+            pass
+    report_text = generate_book_iteration_report(filepath)
+    return {"whitepaper": report_text, "index": index_data}
+
+
+@router.post("/generate/backfill_audits")
+def backfill_audits(body: _AuditBackfillReq):
+    """对全书所有已有章节回溯构建留底档案"""
+    from novel_generator.audit_tracker import backfill_historical_audits
+    results = backfill_historical_audits(body.filepath)
+    return {"success": True, "count": len(results), "chapters": results}

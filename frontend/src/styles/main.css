@@ -1,26 +1,29 @@
 @import "tailwindcss";
 
 @theme {
-  /* ── 复古图书馆配色（与 BookShelf 保持一致）─── */
-  --color-parchment: #f5f0e8;
-  --color-parchment-dark: #e8dfd3;
-  --color-parchment-darker: #d9cfc0;
-  --color-leather: #8b4513;
-  --color-leather-light: #a0522d;
-  --color-leather-dark: #6b3410;
-  --color-ink: #2c1810;
-  --color-ink-light: #4a3728;
-  --color-gold: #d4a855;
-  --color-gold-light: #e8c878;
-  --color-gold-dark: #b8923f;
-  --color-spine: #4a3728;
-  --color-spine-light: #6b4f3a;
-  --color-success: #2d6a4f;
-  --color-error: #9b2226;
-  --color-warning: #ca6702;
+  /* ── 极简中性炭黑 · Monochrome Carbon Dark（Linear / Cursor 质感）─── */
+  --color-parchment: #0c0d10;
+  --color-parchment-dark: #1b1d23;
+  --color-parchment-darker: #272a34;
+  --color-surface: #15171c;
+  --color-border: #272a34;
+  --color-leather: #2f333f;
+  --color-leather-light: #3d4252;
+  --color-leather-dark: #22252e;
+  --color-ink: #e4e4e7;
+  --color-ink-light: #9ca3af;
+  --color-gold: #d4d4d8;
+  --color-gold-light: #f4f4f5;
+  --color-gold-dark: #a1a1aa;
+  --color-spine: #08090b;
+  --color-spine-light: #17191f;
+  --color-success: #10b981;
+  --color-error: #ef4444;
+  --color-warning: #f59e0b;
 
-  /* ── 字体 ─── */
-  --font-serif: 'Georgia', 'Times New Roman', 'Noto Serif SC', serif;
+  /* ── 字体：UI 现代无衬线 + 小说正文护眼衬线 ─── */
+  --font-sans: 'PingFang SC', 'Microsoft YaHei', 'Inter', system-ui, -apple-system, sans-serif;
+  --font-serif: 'Noto Serif SC', 'Songti SC', 'Georgia', serif;
   --font-mono: 'JetBrains Mono', 'Cascadia Code', 'ui-monospace', monospace;
 }
 
@@ -30,24 +33,163 @@
 
 html {
   scroll-behavior: smooth;
+  color-scheme: dark;
 }
 
 body {
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   background-color: var(--color-parchment);
   color: var(--color-ink);
   min-height: 100vh;
   margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── 小说正文阅读与长文精修（#131417 底 + #d4d4d8 柔灰白字）─── */
+.font-novel-prose {
+  font-family: var(--font-serif);
+  color: #d4d4d8;
+}
+
+/* ── 全局中性暗黑表单控件 ─── */
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+textarea,
+select {
+  background-color: #0e1014;
+  color: var(--color-ink);
+  border-color: var(--color-parchment-darker);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #6b7280;
+}
+
+/* ── 全站表面与语义色收敛至中性炭黑 + 翠绿点缀 ─── */
+#app .bg-white {
+  background-color: var(--color-surface);
+}
+#app .bg-white\/90,
+#app .bg-white\/80,
+#app .bg-white\/70,
+#app .bg-white\/60 {
+  background-color: rgba(21, 23, 28, 0.88);
+}
+
+#app .bg-stone-50,
+#app .bg-stone-100,
+#app .bg-stone-200,
+#app .bg-stone-200\/80,
+#app .bg-gray-50,
+#app .bg-gray-100,
+#app .bg-blue-50,
+#app .bg-sky-50,
+#app .bg-orange-50 {
+  background-color: var(--color-parchment-dark);
+}
+
+#app .bg-amber-50,
+#app .bg-amber-50\/70,
+#app .bg-amber-50\/75,
+#app .bg-amber-50\/60,
+#app .bg-amber-50\/50,
+#app .bg-amber-50\/25,
+#app .bg-amber-100 {
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+#app .bg-emerald-50,
+#app .bg-emerald-50\/70,
+#app .bg-emerald-50\/60,
+#app .bg-emerald-50\/50,
+#app .bg-emerald-50\/45,
+#app .bg-emerald-50\/35,
+#app .bg-emerald-50\/30,
+#app .bg-emerald-100,
+#app .bg-green-50,
+#app .bg-green-100 {
+  background-color: rgba(16, 185, 129, 0.12);
+}
+
+#app .bg-rose-50,
+#app .bg-rose-50\/60,
+#app .bg-rose-50\/35,
+#app .bg-rose-100,
+#app .bg-red-50,
+#app .bg-red-100 {
+  background-color: rgba(239, 68, 68, 0.13);
+}
+
+#app .text-stone-700,
+#app .text-stone-800,
+#app .text-stone-900,
+#app .text-gray-700,
+#app .text-gray-800,
+#app .text-gray-900 {
+  color: var(--color-ink);
+}
+
+#app .text-stone-500,
+#app .text-stone-600,
+#app .text-gray-500,
+#app .text-gray-600 {
+  color: var(--color-ink-light);
+}
+
+#app .text-amber-800,
+#app .text-amber-900,
+#app .text-amber-950,
+#app .text-blue-900,
+#app .text-orange-900 {
+  color: #e4e4e7;
+}
+
+#app .text-emerald-700,
+#app .text-emerald-800,
+#app .text-emerald-900,
+#app .text-emerald-950,
+#app .text-green-800 {
+  color: #34d399;
+}
+
+#app .text-rose-700,
+#app .text-rose-800,
+#app .text-rose-900,
+#app .text-red-800 {
+  color: #fca5a5;
+}
+
+#app .border-amber-200,
+#app .border-amber-300,
+#app .border-blue-300,
+#app .border-orange-300,
+#app .border-stone-200,
+#app .border-stone-300,
+#app .border-gray-200,
+#app .border-gray-300 {
+  border-color: var(--color-parchment-darker);
+}
+
+#app .border-emerald-200,
+#app .border-emerald-300,
+#app .border-green-200 {
+  border-color: rgba(16, 185, 129, 0.35);
+}
+
+#app .border-rose-200,
+#app .border-rose-300,
+#app .border-red-200 {
+  border-color: rgba(239, 68, 68, 0.38);
 }
 
 /* ── 滚动条 ────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: var(--color-parchment-dark); }
-::-webkit-scrollbar-thumb { background: var(--color-leather-light); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--color-leather); }
+::-webkit-scrollbar-track { background: #0c0d10; }
+::-webkit-scrollbar-thumb { background: #2b2f3a; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #4b5563; }
 
 /* ── 文字选中 ───────────────────────────────────────────── */
-::selection { background: var(--color-gold); color: var(--color-ink); }
+::selection { background: #3f3f46; color: #fafafa; }
 
 /* ── 过渡动画 ───────────────────────────────────────────── */
 .fade-enter-active, .fade-leave-active { transition: opacity 0.2s ease; }

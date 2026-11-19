@@ -7,7 +7,8 @@ import StepCard from '@/components/StepCard.vue'
 const props = defineProps<{ state: ReturnType<typeof useWorkshopState> }>()
 
 const polishModes = [
-  { value: 'enhance', label: '通用润色', desc: '对关键场景进行感官细节、心理刻画、动作细化等全面扩写' },
+  { value: 'rule_polish', label: '🎯 表达与去套话精准润色', desc: '只改表达不改剧情：排查套话、修剪单句重锤、压制形容词、强化主角生理失控与反派个性，输出修改清单' },
+  { value: 'enhance', label: '通用扩写', desc: '对关键场景进行感官细节、心理刻画、动作细化等全面扩写' },
   { value: 'modify', label: '修改剧情', desc: '根据建议修改指定段落的剧情内容，其余部分保持不变' },
   { value: 'add', label: '增加内容', desc: '在指定位置补充新内容，不删减原有内容' },
 ]

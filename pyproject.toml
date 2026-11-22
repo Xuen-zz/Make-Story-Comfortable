@@ -1,0 +1,22 @@
+[project]
+name = "novel-dag-backend"
+version = "0.1.0"
+description = "ComfyUI-style human-in-the-loop AI novel generation engine"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "aiosqlite>=0.20.0",
+    "jsonpatch>=1.33",
+    "qdrant-client>=1.12.0",
+    "httpx>=0.27.0",
+    "openai>=1.54.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]

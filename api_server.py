@@ -89,6 +89,23 @@ app.include_router(brainstorm.router, prefix="/api")
 app.include_router(workflow.router, prefix="/api")
 app.include_router(assets.router, prefix="/api")
 
+# ── ComfyNovel DAG 引擎与超长篇协同路由 ─────────────────────────────
+import app.nodes as _comfy_nodes
+from app.api.ws import ws_router
+from app.api.runs import runs_router
+from app.api.workflow import workflow_router as dag_mock_workflow_router
+from app.api.projects import projects_router as dag_projects_router
+from app.api.tools import tools_router
+from app.api.workflows import workflows_router
+
+app.include_router(ws_router)
+app.include_router(runs_router)
+app.include_router(dag_mock_workflow_router)
+app.include_router(dag_projects_router)
+app.include_router(tools_router)
+app.include_router(workflows_router)
+
+
 
 # ── 健康检查与桌面系统信息 ────────────────────────────────────────────────────
 

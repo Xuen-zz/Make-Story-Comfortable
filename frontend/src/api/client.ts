@@ -400,3 +400,55 @@ export const assetsApi = {
     llm_config_name?: string
   }) => api.post('/assets/extract_delta', body),
 }
+
+// ── ComfyNovel DAG 引擎与超长篇协同 API ──────────────────────────────
+export const dagEngineApi = {
+  // 运行与控制
+  startRun: (clientId: string, graph: any) =>
+    api.post('/runs', { client_id: clientId, graph }),
+  getRunStatus: (runId: string) =>
+    api.get(`/runs/${encodeURIComponent(runId)}`),
+  resumeRun: (runId: string, clientId: string, modifiedOutput: any) =>
+    api.post(`/runs/${encodeURIComponent(runId)}/resume`, { client_id: clientId, modified_output: modifiedOutput }),
+  cancelRun: (runId: string, clientId: string) =>
+    api.post(`/runs/${encodeURIComponent(runId)}/cancel`, null, { params: { client_id: clientId } }),
+
+  // 项目工程与回滚
+  getProjectConfig: () => api.get('/projects/config'),
+  updateProjectConfig: (config: any) => api.post('/projects/config', config),
+  commitChapterState: (chapterIndex: number, diffPatches: any[], fullState?: any, isFullSnapshot = false) =>
+    api.post('/projects/commit', {
+      chapter_index: chapterIndex,
+      diff_patches: diffPatches,
+      full_state: fullState,
+      is_full_snapshot: isFullSnapshot,
+    }),
+  rollbackChapter: (targetChapter: number) =>
+    api.post('/projects/rollback', { target_chapter: targetChapter }),
+  exportFullNovel: (outputFilename = 'full_novel_export.txt') =>
+    api.post('/projects/export', null, { params: { output_filename: outputFilename } }),
+
+  // 独立辅助工具
+  inpaintText: (payload: {
+    client_id?: string
+    node_id?: string
+    full_text: string
+    start_index: number
+    end_index: number
+    instruction: string
+    model_role?: string
+    context_window?: number
+  }) => api.post('/tools/inpaint', payload),
+  lintNovel: (payload: {
+    current_chapter: number
+    foreshadowing_list?: any[]
+    recent_summaries?: any[]
+    overdue_threshold?: number
+  }) => api.post('/tools/lint', payload),
+
+  // 工作流模板
+  listWorkflows: () => api.get('/workflows'),
+  getWorkflow: (name: string) => api.get(`/workflows/${encodeURIComponent(name)}`),
+  saveWorkflow: (name: string, graph: any) => api.post('/workflows', { name, graph }),
+}
+

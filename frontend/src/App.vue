@@ -26,13 +26,20 @@ async function refreshSystemStatus(autoOpenOnboarding = false) {
     const res = await systemApi.info()
     appVersion.value = res.data.version || '2.1.0'
     hasConfiguredModel.value = Boolean(res.data.has_configured_model)
-    if (autoOpenOnboarding && !hasConfiguredModel.value) {
+    const isDismissed = localStorage.getItem('novelflow_onboarding_dismissed') === 'true'
+    if (autoOpenOnboarding && !hasConfiguredModel.value && !isDismissed) {
       onboardingMode.value = true
       providerModalOpen.value = true
     }
   } catch {
     // 忽略启动探测错误
   }
+}
+
+function handleCloseProviderModal() {
+  localStorage.setItem('novelflow_onboarding_dismissed', 'true')
+  onboardingMode.value = false
+  providerModalOpen.value = false
 }
 
 onMounted(async () => {
@@ -272,7 +279,7 @@ async function handleInstallUpdate() {
     <ProviderManagerModal
       :open="providerModalOpen"
       :onboarding-mode="onboardingMode"
-      @close="providerModalOpen = false"
+      @close="handleCloseProviderModal"
       @synced="refreshSystemStatus(false)"
     />
   </div>

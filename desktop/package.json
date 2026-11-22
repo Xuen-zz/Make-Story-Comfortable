@@ -1,7 +1,7 @@
 {
   "name": "novelflow-studio",
   "productName": "NovelFlow Studio",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "ComfyUI-style Visual Node-Based AI Novel Studio (Desktop Edition)",
   "main": "main.js",
   "author": "NovelFlow Studio",

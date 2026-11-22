@@ -128,15 +128,20 @@ function sendUpdateStatus(payload) {
   }
 }
 
+let isManualUpdateCheck = false
+
 function setupAutoUpdater() {
   if (!autoUpdater || !app.isPackaged) return
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = true
 
   autoUpdater.on('checking-for-update', () => {
-    sendUpdateStatus({ status: 'checking', message: '正在连接 GitHub Releases 检查更新…' })
+    if (isManualUpdateCheck) {
+      sendUpdateStatus({ status: 'checking', message: '正在连接 GitHub Releases 检查更新…' })
+    }
   })
   autoUpdater.on('update-available', (info) => {
+    isManualUpdateCheck = false
     sendUpdateStatus({
       status: 'available',
       version: info.version,
@@ -144,10 +149,13 @@ function setupAutoUpdater() {
     })
   })
   autoUpdater.on('update-not-available', () => {
-    sendUpdateStatus({
-      status: 'up-to-date',
-      message: `当前已是最新版本 v${app.getVersion()}`,
-    })
+    if (isManualUpdateCheck) {
+      sendUpdateStatus({
+        status: 'up-to-date',
+        message: `当前已是最新版本 v${app.getVersion()}`,
+      })
+      isManualUpdateCheck = false
+    }
   })
   autoUpdater.on('download-progress', (progress) => {
     sendUpdateStatus({
@@ -164,10 +172,13 @@ function setupAutoUpdater() {
     })
   })
   autoUpdater.on('error', (err) => {
-    sendUpdateStatus({
-      status: 'error',
-      message: `更新服务提示: ${err?.message || String(err)}`,
-    })
+    if (isManualUpdateCheck) {
+      sendUpdateStatus({
+        status: 'error',
+        message: `更新服务提示: ${err?.message || String(err)}`,
+      })
+      isManualUpdateCheck = false
+    }
   })
 }
 
@@ -215,6 +226,7 @@ function registerIpc() {
     return undefined
   })
   ipcMain.handle('novelflow:check-for-updates', async () => {
+    isManualUpdateCheck = true
     if (!autoUpdater || !app.isPackaged) {
       const payload = {
         status: 'up-to-date',
@@ -222,6 +234,7 @@ function registerIpc() {
         message: `当前版本 v${app.getVersion()}（开发模式；打包安装版支持 GitHub Releases 自动更新）`,
       }
       sendUpdateStatus(payload)
+      isManualUpdateCheck = false
       return payload
     }
     const result = await autoUpdater.checkForUpdates()
@@ -264,9 +277,17 @@ if (!gotLock) {
       await waitForBackendHealth(backendPort, 45000)
       createWindow(backendPort)
       if (autoUpdater && app.isPackaged) {
+        // 启动后 15 秒静默检查一次
         setTimeout(() => {
+          isManualUpdateCheck = false
           autoUpdater.checkForUpdates().catch(() => {})
-        }, 5000)
+        }, 15000)
+
+        // 后台每 3 小时静默轮询一次，仅在发现新版本时提醒用户
+        setInterval(() => {
+          isManualUpdateCheck = false
+          autoUpdater.checkForUpdates().catch(() => {})
+        }, 3 * 60 * 60 * 1000)
       }
     } catch (err) {
       dialog.showErrorBox(

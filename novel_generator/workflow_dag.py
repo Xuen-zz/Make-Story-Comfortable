@@ -218,6 +218,10 @@ PORT_TYPES = {
     "CHAPTER_CTX": {"label": "章节与字数", "color": "#38bdf8"},
     "OUTLINE": {"label": "细纲", "color": "#f59e0b"},
     "MEMORY": {"label": "设定/记忆资产", "color": "#2dd4bf"},
+    "MANDATORY_ANCHOR": {"label": "常驻绝对铁律", "color": "#818cf8"},
+    "ENTITY_RECALL": {"label": "实体设定召回", "color": "#34d399"},
+    "CHAR_SNAPSHOT": {"label": "角色实时状态", "color": "#fbbf24"},
+    "CHAPTER_DELTA": {"label": "章节状态增量", "color": "#fb7185"},
     "STYLE": {"label": "文风/指令", "color": "#ec4899"},
     "MODEL": {"label": "模型配置", "color": "#22c55e"},
     "TEXT": {"label": "正文文本", "color": "#a855f7"},
@@ -348,6 +352,47 @@ def get_node_catalog() -> Dict[str, Any]:
                         "inputs": [],
                         "outputs": [{"id": "model_config", "label": "模型配置", "type": "MODEL"}],
                         "defaultParams": {"llm_config_name": "Gemini 3.8 Flash (内置免密)", "temperature": 0.7},
+                    },
+                ],
+            },
+            {
+                "id": "memory_anchors",
+                "label": "🧠 三层立体记忆与防吃书核心 (Pro)",
+                "nodes": [
+                    {
+                        "type": "mandatory_anchor",
+                        "title": "🏛️ 常驻绝对铁律锚点",
+                        "desc": "世界观物理铁律、主角不可漂移底层人设、本卷终极使命；100% 强制注入 Prompt 首部，绝不走检索，锁死底层骨架。",
+                        "inputs": [],
+                        "outputs": [{"id": "anchor_text", "label": "常驻绝对铁律", "type": "MANDATORY_ANCHOR"}],
+                        "defaultParams": {"override_laws": "", "override_persona": "", "override_goal": ""},
+                    },
+                    {
+                        "type": "entity_vector_rag",
+                        "title": "📚 实体条目向量库 (带 Metadata 过滤)",
+                        "desc": "严格按实体条目（地点/功法/势力）切片，带 status=='active' 过滤与章节生命周期检索，彻底根除新旧打架吃书。",
+                        "inputs": [{"id": "outline", "label": "章节大纲(Query)", "type": "OUTLINE"}],
+                        "outputs": [{"id": "entities_text", "label": "活跃实体设定", "type": "ENTITY_RECALL"}],
+                        "defaultParams": {"top_k": 4, "query_override": ""},
+                    },
+                    {
+                        "type": "char_state_table",
+                        "title": "📊 出场角色实时状态表",
+                        "desc": "基于结构化状态 JSON 精准抽取（Key Lookup）出场人物的实时生死、位置、伤势、随身物品法宝与态度，生成硬约束。",
+                        "inputs": [{"id": "outline", "label": "章节大纲(出场人物)", "type": "OUTLINE"}],
+                        "outputs": [{"id": "char_states_text", "label": "角色实时状态", "type": "CHAR_SNAPSHOT"}],
+                        "defaultParams": {"explicit_characters": ""},
+                    },
+                    {
+                        "type": "state_delta_updater",
+                        "title": "🧬 章后状态差量演进器 (Delta)",
+                        "desc": "定稿后自动调用 LLM 提取本章造成的角色位置位移、伤势好转/恶化、物品消耗/获得，写回 world_state.json 实现连续演进。",
+                        "inputs": [
+                            {"id": "final_text", "label": "定稿正文", "type": "TEXT"},
+                            {"id": "model_config", "label": "模型(可选)", "type": "MODEL"},
+                        ],
+                        "outputs": [{"id": "delta_summary", "label": "状态演进报告", "type": "CHAPTER_DELTA"}],
+                        "defaultParams": {"auto_apply": True},
                     },
                 ],
             },
@@ -1626,6 +1671,108 @@ def execute_workflow_dag(
                 content_n = (params.get("note_content") or "").strip()
                 txt = f"【{title_n}】\n{content_n}" if content_n else ""
                 out = {"context_bundle": {"text": txt, "extra_guidance": txt}}
+
+            elif ntype == "mandatory_anchor":
+                from novel_generator.state_tracker import format_mandatory_anchors_for_prompt, get_mandatory_anchors
+                anchors = get_mandatory_anchors(filepath)
+                laws = (params.get("override_laws") or anchors.get("world_iron_laws") or "").strip()
+                persona = (params.get("override_persona") or anchors.get("protagonist_core_persona") or "").strip()
+                goal = (params.get("override_goal") or anchors.get("current_volume_goal") or "").strip()
+                parts = []
+                if laws: parts.append(f"【世界观绝对铁律（不可违背）】\n{laws}")
+                if persona: parts.append(f"【核心主角底层人设（不可漂移）】\n{persona}")
+                if goal: parts.append(f"【当前卷核心终极目标】\n{goal}")
+                txt = "=== 🏛️ 常驻绝对核心锚点（100% 优先遵循，绝对不可违背） ===\n" + "\n\n".join(parts) + "\n==================================================" if parts else ""
+                out = {
+                    "anchor_text": txt,
+                    "context_bundle": {"text": txt, "extra_guidance": txt},
+                    "laws": laws,
+                    "persona": persona,
+                    "goal": goal,
+                }
+
+            elif ntype == "entity_vector_rag":
+                from novel_generator.vectorstore_utils import query_active_entities, format_entities_for_prompt
+                top_k = int(params.get("top_k") or 4)
+                query = (params.get("query_override") or "").strip() or (inputs.get("outline") or "")[:300]
+                matched = []
+                if query:
+                    try:
+                        from embedding_adapters import create_embedding_adapter
+                        emb_conf = emb_configs.get(default_emb, {})
+                        emb_adapter = None
+                        if emb_conf.get("model_name") or emb_conf.get("base_url"):
+                            emb_adapter = create_embedding_adapter(
+                                emb_conf.get("interface_format", default_emb),
+                                emb_conf.get("api_key", ""),
+                                emb_conf.get("base_url", ""),
+                                emb_conf.get("model_name", ""),
+                            )
+                        matched = query_active_entities(
+                            embedding_adapter=emb_adapter,
+                            filepath=filepath,
+                            query=query,
+                            current_chapter=ch,
+                            top_k=top_k,
+                        )
+                    except Exception as _ee:
+                        logger.warning(f"[EntityRAG] 实体检索异常: {_ee}")
+                txt = format_entities_for_prompt(matched)
+                out = {
+                    "entities_text": txt,
+                    "context_bundle": {"text": txt, "extra_guidance": txt},
+                    "matched_count": len(matched),
+                    "entities": matched,
+                }
+
+            elif ntype == "char_state_table":
+                from novel_generator.state_tracker import format_characters_for_prompt, get_characters_snapshot
+                outline_in = inputs.get("outline") or ""
+                explicit = (params.get("explicit_characters") or "").strip()
+                char_names = [c.strip() for c in explicit.split(",") if c.strip()] if explicit else None
+                if not char_names and outline_in:
+                    from novel_generator.state_tracker import load_world_state
+                    st = load_world_state(filepath)
+                    all_c = list(st.get("characters", {}).keys())
+                    found = [c for c in all_c if c in outline_in]
+                    if found:
+                        char_names = found
+                txt = format_characters_for_prompt(filepath, char_names)
+                snapshot = get_characters_snapshot(filepath, char_names)
+                out = {
+                    "char_states_text": txt,
+                    "context_bundle": {"text": txt, "extra_guidance": txt},
+                    "snapshot": snapshot,
+                    "characters_count": len(snapshot),
+                }
+
+            elif ntype == "state_delta_updater":
+                from novel_generator.state_tracker import extract_chapter_delta_with_llm, apply_state_delta
+                final_text = (inputs.get("final_text") or "").strip()
+                mcfg = inputs.get("model_config") or {}
+                delta_llm, _ = resolve_llm(mcfg.get("llm_config_name") or params.get("llm_config_name", ""))
+                delta = {}
+                summary_lines = []
+                if final_text:
+                    adapter = web_app.get_llm_adapter(delta_llm) if hasattr(web_app, "get_llm_adapter") else getattr(web_app, "llm_adapter", None)
+                    if adapter:
+                        delta = extract_chapter_delta_with_llm(
+                            llm_adapter=adapter,
+                            filepath=filepath,
+                            chapter_text=final_text,
+                            chapter_num=ch,
+                        )
+                        if delta and bool(params.get("auto_apply", True)):
+                            apply_state_delta(filepath, delta, ch)
+                            char_d = delta.get("character_deltas", {})
+                            for cname, cd in char_d.items():
+                                summary_lines.append(f"• 【{cname}】{cd.get('summary') or '状态已演进'}")
+                summary_txt = f"=== 🧬 第 {ch} 章状态演进报告 ===\n" + ("\n".join(summary_lines) if summary_lines else "（本章未提取到显著角色状态变动）")
+                out = {
+                    "delta_summary": summary_txt,
+                    "delta": delta,
+                    "applied": bool(params.get("auto_apply", True)),
+                }
 
             elif ntype == "context_combiner":
                 combined: Dict[str, Any] = {}

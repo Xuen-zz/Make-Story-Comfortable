@@ -11,7 +11,7 @@ import '@vue-flow/core/dist/theme-default.css'
 import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
 
-import { generateApi } from '@/api/client'
+import { generateApi, assetsApi } from '@/api/client'
 import { useWorkflowCanvas } from '@/composables/useWorkflowCanvas'
 import { useProjectStore } from '@/stores/project'
 import WorkflowCustomNode from '@/components/workflow/WorkflowCustomNode.vue'
@@ -102,15 +102,27 @@ function onQuickSearchKeydown(ev: KeyboardEvent) {
   }
 }
 
-// ── 侧滑快速抽屉：细纲目录 & 快速阅读 ──────────────────────────────────────────────
-const sideDrawer = ref<'none' | 'outline' | 'reader'>('none')
+// ── 侧滑快速抽屉：细纲目录 & 快速阅读 & 核心记忆资产 ───────────────────────────
+const sideDrawer = ref<'none' | 'outline' | 'reader' | 'memory'>('none')
 const drawerLoading = ref(false)
 const outlineChapters = ref<Array<{ num: number; title: string; has_final?: boolean; has_draft?: boolean; has_outline?: boolean; chars?: number }>>([])
 const detailedOutlineText = ref('')
 const readerChapterText = ref('')
 const readerError = ref('')
 
-async function openSideDrawer(kind: 'outline' | 'reader') {
+// 核心资产状态
+const memoryTab = ref<'anchors' | 'characters' | 'entities'>('anchors')
+const worldStateData = ref<Record<string, any>>({
+  mandatory_anchors: { world_iron_laws: '', protagonist_core_persona: '', current_volume_goal: '' },
+  characters: {},
+})
+const entityCatalog = ref<Array<{ id: string; name: string; type: string; content: string; status: string; valid_from_chapter: number }>>([])
+const newEntityName = ref('')
+const newEntityType = ref('location')
+const newEntityContent = ref('')
+const savingMemory = ref(false)
+
+async function openSideDrawer(kind: 'outline' | 'reader' | 'memory') {
   if (sideDrawer.value === kind) {
     sideDrawer.value = 'none'
     return
@@ -128,15 +140,81 @@ async function openSideDrawer(kind: 'outline' | 'reader') {
       ])
       outlineChapters.value = dashRes.data?.chapters || []
       detailedOutlineText.value = outRes.data?.content || ''
-    } else {
+    } else if (kind === 'reader') {
       const res = await generateApi.getChapter(wf.canvasChapterNum.value, fp)
       readerChapterText.value = res.data?.content || ''
+    } else if (kind === 'memory') {
+      const [wsRes, entRes] = await Promise.all([
+        assetsApi.getWorldState(fp).catch(() => ({ data: { state: {} } })),
+        assetsApi.getEntities(fp).catch(() => ({ data: { entities: [] } })),
+      ])
+      worldStateData.value = wsRes.data?.state || {}
+      if (!worldStateData.value.mandatory_anchors) {
+        worldStateData.value.mandatory_anchors = { world_iron_laws: '', protagonist_core_persona: '', current_volume_goal: '' }
+      }
+      entityCatalog.value = entRes.data?.entities || []
     }
   } catch (e: unknown) {
-    readerError.value = `第 ${wf.canvasChapterNum.value} 章暂无成稿（${(e as Error).message}）`
-    readerChapterText.value = ''
+    if (kind === 'reader') {
+      readerError.value = `第 ${wf.canvasChapterNum.value} 章暂无成稿（${(e as Error).message}）`
+      readerChapterText.value = ''
+    }
   } finally {
     drawerLoading.value = false
+  }
+}
+
+async function saveCurrentWorldState() {
+  const fp = projectStore.activeProjectData?.filepath || ''
+  if (!fp) return
+  savingMemory.value = true
+  try {
+    await assetsApi.saveWorldState({ filepath: fp, state: worldStateData.value })
+    showToast('✅ 核心记忆与人物状态表已保存！')
+  } catch (e: unknown) {
+    showToast(`❌ 保存失败: ${(e as Error).message}`)
+  } finally {
+    savingMemory.value = false
+  }
+}
+
+async function handleAddEntity() {
+  const fp = projectStore.activeProjectData?.filepath || ''
+  if (!fp || !newEntityName.value.trim() || !newEntityContent.value.trim()) return
+  try {
+    const res = await assetsApi.saveEntity({
+      filepath: fp,
+      item: {
+        name: newEntityName.value.trim(),
+        type: newEntityType.value,
+        content: newEntityContent.value.trim(),
+        status: 'active',
+        valid_from_chapter: wf.canvasChapterNum.value,
+      },
+    })
+    entityCatalog.value.push(res.data.entity)
+    newEntityName.value = ''
+    newEntityContent.value = ''
+    showToast('✅ 设定条目已入向量库！')
+  } catch (e: unknown) {
+    showToast(`❌ 入库失败: ${(e as Error).message}`)
+  }
+}
+
+async function handleDeprecateEntity(entityId: string) {
+  const fp = projectStore.activeProjectData?.filepath || ''
+  if (!fp) return
+  try {
+    await assetsApi.deprecateEntity({
+      filepath: fp,
+      entity_id: entityId,
+      chapter_num: wf.canvasChapterNum.value,
+    })
+    const target = entityCatalog.value.find(e => e.id === entityId)
+    if (target) target.status = 'deprecated'
+    showToast('✅ 已将该设定标记为废弃（检索自动过滤防吃书）')
+  } catch (e: unknown) {
+    showToast(`❌ 标记废弃失败: ${(e as Error).message}`)
   }
 }
 
@@ -208,12 +286,21 @@ function resolvePortInfo(nodeId: string, handleId: string | null | undefined, di
   return list.find(p => p.id === handleId) || null
 }
 
+function isCompatiblePort(srcType: string, tgtType: string): boolean {
+  if (srcType === tgtType) return true
+  // 基础记忆端口允许接入常驻绝对铁律、实体召回、角色状态卡
+  if (tgtType === 'MEMORY' && ['MEMORY', 'MANDATORY_ANCHOR', 'ENTITY_RECALL', 'CHAR_SNAPSHOT'].includes(srcType)) {
+    return true
+  }
+  return false
+}
+
 function isValidConnection(conn: Connection): boolean {
   if (!conn.source || !conn.target || conn.source === conn.target) return false
   const srcPort = resolvePortInfo(conn.source, conn.sourceHandle, 'out')
   const tgtPort = resolvePortInfo(conn.target, conn.targetHandle, 'in')
   if (!srcPort || !tgtPort) return false
-  return srcPort.type === tgtPort.type
+  return isCompatiblePort(srcPort.type, tgtPort.type)
 }
 
 function handleConnect(conn: Connection) {
@@ -224,7 +311,7 @@ function handleConnect(conn: Connection) {
   }
   const srcPort = resolvePortInfo(conn.source, conn.sourceHandle, 'out')
   const tgtPort = resolvePortInfo(conn.target, conn.targetHandle, 'in')
-  if (srcPort && tgtPort && srcPort.type !== tgtPort.type) {
+  if (srcPort && tgtPort && !isCompatiblePort(srcPort.type, tgtPort.type)) {
     const srcLabel = wf.portTypes.value[srcPort.type]?.label || srcPort.type
     const tgtLabel = wf.portTypes.value[tgtPort.type]?.label || tgtPort.type
     showToast(`❌ 端口类型不匹配：无法将「${srcLabel}」接入「${tgtLabel}」`)
@@ -473,6 +560,14 @@ const inspectedOutputs = computed(() =>
         >
           📖 快速阅读
         </button>
+        <button
+          @click="openSideDrawer('memory')"
+          type="button"
+          class="px-2.5 py-1.5 rounded-lg border text-xs font-medium cursor-pointer transition-colors"
+          :class="sideDrawer === 'memory' ? 'bg-indigo-600 text-white border-indigo-400 font-bold' : 'bg-[#1b1e25] hover:bg-[#252934] border-[#2c303b] text-indigo-300'"
+        >
+          🧠 记忆资产
+        </button>
       </div>
 
       <!-- 右：章号 / 批量区间 / Queue Prompt 执行按钮 -->
@@ -686,6 +781,10 @@ const inspectedOutputs = computed(() =>
             <div class="px-3 py-1 text-[10px] font-bold text-zinc-400 uppercase">在此处添加节点</div>
             <button
               v-for="quick in [
+                ['mandatory_anchor', '🏛️ 常驻绝对铁律锚点'],
+                ['entity_vector_rag', '📚 实体条目向量库(Metadata)'],
+                ['char_state_table', '📊 出场角色实时状态表'],
+                ['state_delta_updater', '🧬 章后状态差量演进器'],
                 ['character_profile', '🎭 人物关系与人设'],
                 ['prev_excerpt_loader', '📖 前章尾段衔接'],
                 ['rag_retriever', '🔍 RAG 知识库检索'],
@@ -756,7 +855,13 @@ const inspectedOutputs = computed(() =>
       >
         <div class="px-3.5 py-2.5 bg-[#15171c] border-b border-[#23262f] flex items-center justify-between">
           <div class="text-xs font-bold text-zinc-100">
-            {{ sideDrawer === 'outline' ? '📑 章节目录与细纲（点击跳转目标章）' : `📖 第 ${wf.canvasChapterNum.value} 章快速阅读` }}
+            {{
+              sideDrawer === 'outline'
+                ? '📑 章节目录与细纲（点击跳转目标章）'
+                : sideDrawer === 'reader'
+                ? `📖 第 ${wf.canvasChapterNum.value} 章快速阅读`
+                : '🧠 三层立体记忆与防吃书资产中心'
+            }}
           </div>
           <button @click="sideDrawer = 'none'" type="button" class="text-xs text-zinc-400 hover:text-white cursor-pointer">
             收起 ✕
@@ -790,6 +895,190 @@ const inspectedOutputs = computed(() =>
           <div v-if="detailedOutlineText" class="pt-2 border-t border-[#23262f] space-y-1">
             <div class="text-[11px] font-bold text-zinc-400">全局细纲快照</div>
             <pre class="rounded-lg bg-[#131417] border border-[#23262f] p-2.5 text-[11px] whitespace-pre-wrap leading-relaxed text-[#d4d4d8]">{{ detailedOutlineText }}</pre>
+          </div>
+        </div>
+
+        <div v-else-if="sideDrawer === 'memory'" class="flex-1 overflow-y-auto p-3.5 space-y-3 text-xs">
+          <!-- 3 个子 Tab 切换 -->
+          <div class="flex rounded-lg bg-[#15171c] border border-[#262932] p-0.5 text-[11px]">
+            <button
+              @click="memoryTab = 'anchors'"
+              type="button"
+              class="flex-1 py-1 rounded cursor-pointer transition-colors"
+              :class="memoryTab === 'anchors' ? 'bg-indigo-600 text-white font-bold' : 'text-zinc-400 hover:text-zinc-200'"
+            >
+              🏛️ 绝对铁律
+            </button>
+            <button
+              @click="memoryTab = 'characters'"
+              type="button"
+              class="flex-1 py-1 rounded cursor-pointer transition-colors"
+              :class="memoryTab === 'characters' ? 'bg-amber-600 text-white font-bold' : 'text-zinc-400 hover:text-zinc-200'"
+            >
+              📊 人物状态
+            </button>
+            <button
+              @click="memoryTab = 'entities'"
+              type="button"
+              class="flex-1 py-1 rounded cursor-pointer transition-colors"
+              :class="memoryTab === 'entities' ? 'bg-emerald-600 text-white font-bold' : 'text-zinc-400 hover:text-zinc-200'"
+            >
+              📚 实体词条
+            </button>
+          </div>
+
+          <!-- Tab 1: 绝对铁律与不可动摇人设 -->
+          <div v-if="memoryTab === 'anchors'" class="space-y-3">
+            <div class="text-[11px] text-indigo-300 bg-indigo-950/40 border border-indigo-800/40 p-2 rounded-lg leading-relaxed">
+              💡 <strong>层级 A 核心</strong>：100% 强制注入 Prompt 首部，绝不走向量检索，锁死底层规则与人设底色。
+            </div>
+            <label class="block space-y-1">
+              <span class="font-bold text-zinc-200">世界观绝对铁律（不可违背规则）</span>
+              <textarea
+                v-model="worldStateData.mandatory_anchors.world_iron_laws"
+                rows="4"
+                placeholder="例如：境界压制不可逾越；死者无法无代价复活..."
+                class="w-full rounded-lg bg-[#131417] border border-[#272a34] p-2 text-xs text-zinc-200 font-novel-prose"
+              />
+            </label>
+            <label class="block space-y-1">
+              <span class="font-bold text-zinc-200">核心主角底层人设（不可漂移）</span>
+              <textarea
+                v-model="worldStateData.mandatory_anchors.protagonist_core_persona"
+                rows="4"
+                placeholder="例如：杀伐果断但不滥杀；对外极度谨慎善于伪装；逆鳞为亲友..."
+                class="w-full rounded-lg bg-[#131417] border border-[#272a34] p-2 text-xs text-zinc-200 font-novel-prose"
+              />
+            </label>
+            <label class="block space-y-1">
+              <span class="font-bold text-zinc-200">当前卷终极目标</span>
+              <textarea
+                v-model="worldStateData.mandatory_anchors.current_volume_goal"
+                rows="2"
+                placeholder="例如：立足落日城，隐藏天机神物，突破至筑基期..."
+                class="w-full rounded-lg bg-[#131417] border border-[#272a34] p-2 text-xs text-zinc-200 font-novel-prose"
+              />
+            </label>
+            <button
+              @click="saveCurrentWorldState"
+              :disabled="savingMemory"
+              type="button"
+              class="w-full py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold cursor-pointer"
+            >
+              {{ savingMemory ? '正在保存...' : '💾 保存常驻绝对铁律' }}
+            </button>
+          </div>
+
+          <!-- Tab 2: 角色状态动态表 -->
+          <div v-else-if="memoryTab === 'characters'" class="space-y-3">
+            <div class="text-[11px] text-amber-300 bg-amber-950/40 border border-amber-800/40 p-2 rounded-lg leading-relaxed">
+              💡 <strong>层级 C 核心</strong>：按出场角色精准提取实时生死/物理位置/伤势/随身道具，每章定稿后由 LLM 提取 Delta 自动演进。
+            </div>
+            <div v-if="!Object.keys(worldStateData.characters || {}).length" class="text-zinc-500 py-4 text-center">
+              暂无已追踪角色卡，可在此直接手动添加或通过章节差量演进器自动生成。
+            </div>
+            <div
+              v-for="(info, cname) in worldStateData.characters"
+              :key="cname"
+              class="rounded-xl border border-[#272a34] bg-[#131417] p-2.5 space-y-1.5"
+            >
+              <div class="flex items-center justify-between">
+                <span class="font-bold text-zinc-100">{{ cname }}</span>
+                <label class="flex items-center gap-1 text-[11px] text-zinc-400">
+                  <input v-model="info.is_alive" type="checkbox" />
+                  <span>{{ info.is_alive ? '存活' : '已死亡' }}</span>
+                </label>
+              </div>
+              <div class="grid grid-cols-2 gap-1.5 text-[11px]">
+                <label class="space-y-0.5">
+                  <span class="text-zinc-500">所在位置</span>
+                  <input v-model="info.current_location" class="w-full px-1.5 py-0.5 rounded bg-[#0e1014] border border-[#262932] text-zinc-200" />
+                </label>
+                <label class="space-y-0.5">
+                  <span class="text-zinc-500">身体/伤势状态</span>
+                  <input v-model="info.physical_condition" class="w-full px-1.5 py-0.5 rounded bg-[#0e1014] border border-[#262932] text-zinc-200" />
+                </label>
+              </div>
+            </div>
+            <button
+              @click="saveCurrentWorldState"
+              :disabled="savingMemory"
+              type="button"
+              class="w-full py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold cursor-pointer"
+            >
+              {{ savingMemory ? '正在保存...' : '💾 保存角色状态表' }}
+            </button>
+          </div>
+
+          <!-- Tab 3: 实体设定词条库 (带状态过滤与废弃管理) -->
+          <div v-else class="space-y-3">
+            <div class="text-[11px] text-emerald-300 bg-emerald-950/40 border border-emerald-800/40 p-2 rounded-lg leading-relaxed">
+              💡 <strong>层级 B 核心</strong>：按设定条目原子切片，带 metadata 标签；旧设定废弃后打标 deprecated 自动过滤，绝不吃书。
+            </div>
+            <!-- 新建条目卡片 -->
+            <div class="rounded-xl border border-[#272a34] bg-[#131417] p-2.5 space-y-2">
+              <div class="font-bold text-zinc-200">➕ 录入新设定实体</div>
+              <div class="grid grid-cols-3 gap-1.5">
+                <input
+                  v-model="newEntityName"
+                  placeholder="实体名称(如: 落日森林)"
+                  class="col-span-2 px-2 py-1 rounded bg-[#0e1014] border border-[#262932] text-zinc-200"
+                />
+                <select v-model="newEntityType" class="px-2 py-1 rounded bg-[#0e1014] border border-[#262932] text-zinc-200">
+                  <option value="location">地点</option>
+                  <option value="cultivation">功法/术法</option>
+                  <option value="faction">势力/宗门</option>
+                  <option value="character">配角人设</option>
+                  <option value="lore">世界秘辛</option>
+                </select>
+              </div>
+              <textarea
+                v-model="newEntityContent"
+                rows="2"
+                placeholder="输入完整的独立设定条目描述..."
+                class="w-full rounded bg-[#0e1014] border border-[#262932] p-1.5 text-xs text-zinc-200 font-novel-prose"
+              />
+              <button
+                @click="handleAddEntity"
+                type="button"
+                class="w-full py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer"
+              >
+                + 录入向量库 (第 {{ wf.canvasChapterNum.value }} 章生效)
+              </button>
+            </div>
+
+            <!-- 已录入实体列表 -->
+            <div class="space-y-1.5">
+              <div class="text-[11px] font-bold text-zinc-400">已入库实体条目（{{ entityCatalog.length }} 条）</div>
+              <div
+                v-for="ent in entityCatalog"
+                :key="ent.id"
+                class="rounded-xl border p-2.5 space-y-1 transition-colors"
+                :class="ent.status === 'deprecated' ? 'border-red-900/40 bg-red-950/20 opacity-60' : 'border-[#272a34] bg-[#131417]'"
+              >
+                <div class="flex items-center justify-between">
+                  <span class="font-bold text-zinc-200">【{{ ent.type }}】{{ ent.name }}</span>
+                  <div class="flex items-center gap-1.5">
+                    <span
+                      class="text-[10px] px-1.5 py-0.5 rounded"
+                      :class="ent.status === 'active' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300'"
+                    >
+                      {{ ent.status === 'active' ? '活跃有效' : '已废弃(不召回)' }}
+                    </span>
+                    <button
+                      v-if="ent.status === 'active'"
+                      @click="handleDeprecateEntity(ent.id)"
+                      type="button"
+                      class="text-[10px] text-zinc-400 hover:text-red-400 cursor-pointer"
+                      title="废弃此旧设定，防止后期吃书"
+                    >
+                      标记废弃
+                    </button>
+                  </div>
+                </div>
+                <div class="text-[11px] text-zinc-400 line-clamp-2">{{ ent.content }}</div>
+              </div>
+            </div>
           </div>
         </div>
 

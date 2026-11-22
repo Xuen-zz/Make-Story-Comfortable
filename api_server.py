@@ -50,7 +50,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.1.1"
 
 app = FastAPI(
     title="NovelFlow Studio API",
@@ -69,6 +69,7 @@ app.add_middleware(
 # ── 挂载路由 ─────────────────────────────────────────────────────────────────
 
 from api.routers import (
+    assets,
     projects, config, presets, generate,
     styles, knowledge, files, logs, consistency, xp_presets,
     brainstorm, workflow,
@@ -86,6 +87,7 @@ app.include_router(consistency.router, prefix="/api")
 app.include_router(xp_presets.router, prefix="/api")
 app.include_router(brainstorm.router, prefix="/api")
 app.include_router(workflow.router, prefix="/api")
+app.include_router(assets.router, prefix="/api")
 
 
 # ── 健康检查与桌面系统信息 ────────────────────────────────────────────────────

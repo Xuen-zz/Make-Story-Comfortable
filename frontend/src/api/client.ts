@@ -380,3 +380,23 @@ export const systemApi = {
   info: () => api.get('/system/info'),
   setBooksRoot: (books_root: string) => api.post('/system/books_root', { books_root }),
 }
+
+// ── 核心创作记忆与资产 API (三层立体防吃书架构) ──────────────────────────────
+export const assetsApi = {
+  getWorldState: (filepath?: string) => api.get('/assets/world_state', { params: { filepath } }),
+  saveWorldState: (body: { filepath?: string; state: Record<string, unknown> }) =>
+    api.post('/assets/world_state', body),
+  getEntities: (filepath?: string) => api.get('/assets/entities', { params: { filepath } }),
+  saveEntity: (body: { filepath?: string; item: Record<string, unknown> }) =>
+    api.post('/assets/entities', body),
+  deprecateEntity: (body: { filepath?: string; entity_id: string; chapter_num: number }) =>
+    api.post('/assets/entities/deprecate', body),
+  extractDelta: (body: {
+    filepath?: string
+    chapter_num: number
+    chapter_text: string
+    character_names?: string[]
+    auto_apply?: boolean
+    llm_config_name?: string
+  }) => api.post('/assets/extract_delta', body),
+}

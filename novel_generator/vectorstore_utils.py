@@ -523,3 +523,221 @@ def _get_sentence_transformer(model_name: str = 'paraphrase-MiniLM-L6-v2'):
         logging.error(f"Failed to load sentence transformer model: {e}")
         traceback.print_exc()
         return None
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 设定条目化向量资产库 (Entity-Based Vector Asset Store)
+# 核心技巧：
+# 1. 严格按实体/条目切片（一个地点/一个功法/一个角色一个独立 Chunk），杜绝按字数机械切碎
+# 2. 善用 Metadata 过滤：入库打标 status=active，设定过时废弃时设为 deprecated，检索时直接过滤
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _get_entity_catalog_path(filepath: str) -> str:
+    return os.path.join(filepath, "entity_catalog.json")
+
+
+def load_entity_catalog(filepath: str) -> list[dict]:
+    """读取当前书籍的设定实体条目清单。"""
+    path = _get_entity_catalog_path(filepath)
+    if not os.path.exists(path):
+        return []
+    try:
+        import json
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logging.warning(f"读取 entity_catalog.json 失败: {e}")
+        return []
+
+
+def save_entity_catalog(filepath: str, entities: list[dict]) -> None:
+    """持久化保存设定实体条目清单。"""
+    path = _get_entity_catalog_path(filepath)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        import json
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(entities, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logging.error(f"保存 entity_catalog.json 失败: {e}")
+
+
+def add_or_update_entity_item(embedding_adapter, filepath: str, item: dict) -> dict:
+    """
+    按设定条目添加或更新一个实体 Chunk 到向量库与实体清单中。
+    item 格式:
+    {
+      "id": "loc_blackstone_city",
+      "type": "location" | "faction" | "cultivation" | "character" | "lore" | "plot_recap",
+      "name": "黑石城",
+      "content": "完整的地点定义描述...",
+      "tags": ["大秦帝国", "边陲", "禁空法阵"],
+      "status": "active" | "deprecated",
+      "valid_from_chapter": 1,
+      "deprecated_at_chapter": null
+    }
+    """
+    eid = str(item.get("id") or f"ent_{int(__import__('time').time()*1000)}")
+    ename = str(item.get("name") or "未命名设定").strip()
+    etype = str(item.get("type") or "lore").strip()
+    econtent = str(item.get("content") or "").strip()
+    etags = item.get("tags") or []
+    status = str(item.get("status") or "active").strip()
+    valid_from = int(item.get("valid_from_chapter") or 1)
+    dep_at = item.get("deprecated_at_chapter")
+
+    record = {
+        "id": eid,
+        "type": etype,
+        "name": ename,
+        "content": econtent,
+        "tags": etags,
+        "status": status,
+        "valid_from_chapter": valid_from,
+        "deprecated_at_chapter": dep_at,
+        "updated_at": __import__('time').time(),
+    }
+
+    # 1. 更新 JSON 清单
+    catalog = load_entity_catalog(filepath)
+    new_cat = [c for c in catalog if str(c.get("id")) != eid]
+    new_cat.append(record)
+    save_entity_catalog(filepath, new_cat)
+
+    # 2. 如果提供了 embedding_adapter 且存在有效内容，插入/更新 Chroma 向量库
+    if embedding_adapter and econtent:
+        store = load_vector_store(embedding_adapter, filepath)
+        page_text = f"【{etype.upper()}: {ename}】\n{econtent}"
+        metadata = {
+            "entity_id": eid,
+            "entity_type": etype,
+            "name": ename,
+            "status": status,
+            "valid_from_chapter": valid_from,
+            "deprecated_at_chapter": dep_at or -1,
+        }
+        doc = Document(page_content=page_text, metadata=metadata)
+        try:
+            if not store:
+                init_vector_store(embedding_adapter, [page_text], filepath)
+            else:
+                store.add_documents([doc])
+            logging.info(f"实体条目已入向量库: [{etype}] {ename} (status={status})")
+        except Exception as e:
+            logging.warning(f"实体条目入库失败: {e}")
+
+    return record
+
+
+def deprecate_entity_item(embedding_adapter, filepath: str, entity_id: str, chapter_num: int) -> bool:
+    """
+    将旧设定标记为废弃 (deprecated)，检索时自动过滤，防止新旧设定打架吃书。
+    """
+    catalog = load_entity_catalog(filepath)
+    found = False
+    for item in catalog:
+        if str(item.get("id")) == str(entity_id):
+            item["status"] = "deprecated"
+            item["deprecated_at_chapter"] = int(chapter_num)
+            found = True
+            break
+    if found:
+        save_entity_catalog(filepath, catalog)
+        # 同步更新向量库记录状态（若支持直接修改元数据）
+        logging.info(f"设定条目 {entity_id} 已在第 {chapter_num} 章被标记为废弃")
+    return found
+
+
+def query_active_entities(
+    embedding_adapter,
+    filepath: str,
+    query: str,
+    current_chapter: int = 1,
+    top_k: int = 4,
+    entity_types: list[str] | None = None,
+) -> list[dict]:
+    """
+    根据当前章节大纲/上下文，语义检索活跃设定条目。
+    - 严格过滤 status == 'active'
+    - 严格过滤 valid_from_chapter <= current_chapter
+    - 严格过滤已废弃条目 (deprecated_at_chapter <= current_chapter)
+    """
+    catalog = load_entity_catalog(filepath)
+    # 本地有效候选集（保证任何情况都有保底检索）
+    active_candidates = [
+        c for c in catalog
+        if c.get("status", "active") == "active"
+        and int(c.get("valid_from_chapter", 1)) <= current_chapter
+        and (not c.get("deprecated_at_chapter") or int(c.get("deprecated_at_chapter")) > current_chapter)
+        and (not entity_types or c.get("type") in entity_types)
+    ]
+
+    if not active_candidates:
+        return []
+
+    # 1. 尝试使用 Chroma 向量库检索
+    store = load_vector_store(embedding_adapter, filepath)
+    if store and query.strip():
+        try:
+            # 带 metadata status 过滤
+            res_with_scores = store.similarity_search_with_relevance_scores(
+                query, k=top_k * 2, filter={"status": "active"}
+            )
+            matched_items: list[dict] = []
+            seen_ids = set()
+            for doc, score in res_with_scores:
+                eid = doc.metadata.get("entity_id")
+                vf = int(doc.metadata.get("valid_from_chapter") or 1)
+                dep = int(doc.metadata.get("deprecated_at_chapter") or -1)
+                if dep > 0 and dep <= current_chapter:
+                    continue
+                if vf > current_chapter:
+                    continue
+                # 从 catalog 中匹配完整条目
+                cat_item = next((c for c in active_candidates if c.get("id") == eid), None)
+                if cat_item and eid not in seen_ids:
+                    seen_ids.add(eid)
+                    item_copy = dict(cat_item)
+                    item_copy["relevance_score"] = float(score)
+                    matched_items.append(item_copy)
+                    if len(matched_items) >= top_k:
+                        break
+            if matched_items:
+                return matched_items
+        except Exception as e:
+            logging.warning(f"向量库语义召回异常，使用本地条目匹配: {e}")
+
+    # 2. 保底：关键词/实体名匹配
+    q_lower = query.lower()
+    scored = []
+    for c in active_candidates:
+        score = 0
+        name = str(c.get("name", "")).lower()
+        if name and name in q_lower:
+            score += 10
+        for tag in c.get("tags") or []:
+            if str(tag).lower() in q_lower:
+                score += 3
+        if score > 0:
+            scored.append((score, c))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    if scored:
+        return [x[1] for x in scored[:top_k]]
+
+    # 默认返回最新入库的前几个重要活跃设定
+    return active_candidates[:top_k]
+
+
+def format_entities_for_prompt(entities: list[dict]) -> str:
+    """格式化召回的活跃实体为 Prompt 注入块。"""
+    if not entities:
+        return ""
+    lines = ["=== 📚 召回关联设定与世界观条目（当前活跃生效，禁止吃书） ==="]
+    for ent in entities:
+        t_label = ent.get("type", "lore").upper()
+        name = ent.get("name", "未命名")
+        content = ent.get("content", "").strip()
+        lines.append(f"【{t_label}: {name}】\n{content}")
+    lines.append("==========================================================")
+    return "\n\n".join(lines)
+

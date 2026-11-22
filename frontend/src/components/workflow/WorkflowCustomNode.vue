@@ -33,6 +33,9 @@ function portColor(portType: string): string {
 
 const headerAccent = computed(() => {
   const t = props.data.nodeType
+  if (['mandatory_anchor', 'entity_vector_rag', 'char_state_table', 'state_delta_updater'].includes(t)) {
+    return 'border-t-indigo-400'
+  }
   if (['idea_seed', 'arch_generator', 'directory_generator', 'batch_outline_gate'].includes(t)) {
     return 'border-t-blue-400'
   }
@@ -83,6 +86,10 @@ const previewSnippet = computed(() => {
     || out.final_text
     || out.arch_text
     || out.directory_text
+    || out.anchor_text
+    || out.entities_text
+    || out.char_states_text
+    || out.delta_summary
     || out.checklist
     || out.outline
     || out.handoff
@@ -380,6 +387,103 @@ function canRunFromHere() {
             ✅ 确认细纲放行
           </button>
         </div>
+      </template>
+
+      <!-- mandatory_anchor -->
+      <template v-else-if="data.nodeType === 'mandatory_anchor'">
+        <div class="text-[10px] text-indigo-300 bg-indigo-950/40 border border-indigo-800/40 p-1.5 rounded">
+          🏛️ 100% 强制注入 Prompt 首部，完全不走相似度检索，锁死世界铁律与主角底色。
+        </div>
+        <label class="block space-y-0.5">
+          <span class="text-zinc-400">临时补充铁律 (选填)</span>
+          <textarea
+            :value="params.override_laws || ''"
+            @input="setParam('override_laws', ($event.target as HTMLTextAreaElement).value)"
+            rows="2"
+            placeholder="留空自动读取 world_state.json 设定..."
+            class="w-full rounded bg-[#0e1014] border border-[#262932] p-1.5 text-[10px] text-zinc-200"
+          />
+        </label>
+        <label class="block space-y-0.5">
+          <span class="text-zinc-400">临时修正主角底色 (选填)</span>
+          <textarea
+            :value="params.override_persona || ''"
+            @input="setParam('override_persona', ($event.target as HTMLTextAreaElement).value)"
+            rows="2"
+            placeholder="留空自动读取主角不可逆人设..."
+            class="w-full rounded bg-[#0e1014] border border-[#262932] p-1.5 text-[10px] text-zinc-200"
+          />
+        </label>
+      </template>
+
+      <!-- entity_vector_rag -->
+      <template v-else-if="data.nodeType === 'entity_vector_rag'">
+        <div class="text-[10px] text-emerald-300 bg-emerald-950/40 border border-emerald-800/40 p-1.5 rounded">
+          📚 按设定条目切片 + 仅检索 active 活跃实体，旧设定废弃自动屏蔽，防吃书。
+        </div>
+        <div class="grid grid-cols-2 gap-1.5">
+          <label class="space-y-0.5">
+            <span class="text-zinc-400">召回条数 (Top-K)</span>
+            <input
+              :value="params.top_k ?? 4"
+              @input="setParam('top_k', Number(($event.target as HTMLInputElement).value) || 4)"
+              type="number"
+              min="1"
+              max="10"
+              class="w-full px-2 py-1 rounded bg-[#0e1014] border border-[#262932] text-emerald-300 font-mono"
+            />
+          </label>
+          <label class="space-y-0.5">
+            <span class="text-zinc-400">状态过滤</span>
+            <input
+              value="仅 active 有效条目"
+              disabled
+              class="w-full px-2 py-1 rounded bg-[#0e1014] border border-[#262932] text-zinc-400 text-[10px]"
+            />
+          </label>
+        </div>
+        <label class="block space-y-0.5">
+          <span class="text-zinc-400">覆盖检索关键词 (选填)</span>
+          <input
+            :value="params.query_override || ''"
+            @input="setParam('query_override', ($event.target as HTMLInputElement).value)"
+            type="text"
+            placeholder="留空则自动拿本章细纲匹配..."
+            class="w-full px-2 py-1 rounded bg-[#0e1014] border border-[#262932] text-zinc-200"
+          />
+        </label>
+      </template>
+
+      <!-- char_state_table -->
+      <template v-else-if="data.nodeType === 'char_state_table'">
+        <div class="text-[10px] text-amber-300 bg-amber-950/40 border border-amber-800/40 p-1.5 rounded">
+          📊 根据出场人物精确捞取实时伤势、位置坐标、随身法宝物品与好感度硬约束。
+        </div>
+        <label class="block space-y-0.5">
+          <span class="text-zinc-400">指定出场人物 (逗号分隔，选填)</span>
+          <input
+            :value="params.explicit_characters || ''"
+            @input="setParam('explicit_characters', ($event.target as HTMLInputElement).value)"
+            type="text"
+            placeholder="留空自动从本章大纲提取出场角色..."
+            class="w-full px-2 py-1 rounded bg-[#0e1014] border border-[#262932] text-amber-300"
+          />
+        </label>
+      </template>
+
+      <!-- state_delta_updater -->
+      <template v-else-if="data.nodeType === 'state_delta_updater'">
+        <div class="text-[10px] text-rose-300 bg-rose-950/40 border border-rose-800/40 p-1.5 rounded">
+          🧬 章节定稿后自动调用 LLM 提取本章产生的位置、物品损耗、伤势变动并写回状态表。
+        </div>
+        <label class="flex items-center gap-2 text-rose-300 cursor-pointer pt-1">
+          <input
+            :checked="params.auto_apply !== false"
+            @change="setParam('auto_apply', ($event.target as HTMLInputElement).checked)"
+            type="checkbox"
+          />
+          <span>自动将提取出的 Delta 写入 world_state.json</span>
+        </label>
       </template>
 
       <!-- chapter_input -->

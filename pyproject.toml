@@ -1,6 +1,6 @@
 [project]
 name = "novel-dag-backend"
-version = "0.1.0"
+version = "2.2.0"
 description = "ComfyUI-style human-in-the-loop AI novel generation engine"
 requires-python = ">=3.11"
 dependencies = [

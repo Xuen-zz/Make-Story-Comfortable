@@ -50,7 +50,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-APP_VERSION = "2.1.1"
+APP_VERSION = "2.2.0"
 
 app = FastAPI(
     title="NovelFlow Studio API",

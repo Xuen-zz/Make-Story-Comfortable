@@ -135,12 +135,32 @@ function setupAutoUpdater() {
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = true
 
+  try {
+    autoUpdater.setFeedURL({
+      provider: 'github',
+      owner: 'Xuen-zz',
+      repo: 'Make-Story-Comfortable',
+      releaseType: 'release',
+    })
+  } catch (feedErr) {
+    console.error('[NovelFlow AutoUpdater] setFeedURL error:', feedErr)
+  }
+
+  const logUpdate = (msg) => {
+    try {
+      const logFile = path.join(app.getPath('userData'), 'app.log')
+      fs.appendFileSync(logFile, `${new Date().toISOString()} - [Updater] - ${msg}\n`)
+    } catch {}
+  }
+
   autoUpdater.on('checking-for-update', () => {
+    logUpdate('Checking for update from GitHub Releases...')
     if (isManualUpdateCheck) {
       sendUpdateStatus({ status: 'checking', message: '正在连接 GitHub Releases 检查更新…' })
     }
   })
   autoUpdater.on('update-available', (info) => {
+    logUpdate(`Update available: v${info.version}`)
     isManualUpdateCheck = false
     sendUpdateStatus({
       status: 'available',
@@ -148,7 +168,8 @@ function setupAutoUpdater() {
       message: `发现新版本 v${info.version} 可升级`,
     })
   })
-  autoUpdater.on('update-not-available', () => {
+  autoUpdater.on('update-not-available', (info) => {
+    logUpdate(`App is up to date: v${app.getVersion()}`)
     if (isManualUpdateCheck) {
       sendUpdateStatus({
         status: 'up-to-date',
@@ -165,6 +186,7 @@ function setupAutoUpdater() {
     })
   })
   autoUpdater.on('update-downloaded', (info) => {
+    logUpdate(`Update downloaded: v${info.version}`)
     sendUpdateStatus({
       status: 'downloaded',
       version: info.version,
@@ -172,10 +194,12 @@ function setupAutoUpdater() {
     })
   })
   autoUpdater.on('error', (err) => {
+    const errorMsg = err?.message || String(err)
+    logUpdate(`Updater error: ${errorMsg}`)
     if (isManualUpdateCheck) {
       sendUpdateStatus({
         status: 'error',
-        message: `更新服务提示: ${err?.message || String(err)}`,
+        message: `更新服务提示: ${errorMsg}`,
       })
       isManualUpdateCheck = false
     }
@@ -237,11 +261,24 @@ function registerIpc() {
       isManualUpdateCheck = false
       return payload
     }
-    const result = await autoUpdater.checkForUpdates()
-    const nextVer = result?.updateInfo?.version
-    return {
-      status: nextVer && nextVer !== app.getVersion() ? 'available' : 'up-to-date',
-      version: nextVer || app.getVersion(),
+    try {
+      const result = await autoUpdater.checkForUpdates()
+      const nextVer = result?.updateInfo?.version
+      return {
+        status: nextVer && nextVer !== app.getVersion() ? 'available' : 'up-to-date',
+        version: nextVer || app.getVersion(),
+      }
+    } catch (err) {
+      isManualUpdateCheck = false
+      const errorMsg = err?.message || String(err)
+      sendUpdateStatus({
+        status: 'error',
+        message: `检查更新失败: ${errorMsg}`,
+      })
+      return {
+        status: 'error',
+        message: errorMsg,
+      }
     }
   })
   ipcMain.handle('novelflow:download-update', async () => {

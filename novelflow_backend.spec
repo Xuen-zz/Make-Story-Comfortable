@@ -35,6 +35,10 @@ hiddenimports = [
     'langchain_openai',
     'langchain_chroma',
     'gradio_stub',
+    'aiosqlite',
+    'jsonpatch',
+    'qdrant_client',
+    'httpx',
 ]
 
 binaries = []
@@ -48,7 +52,7 @@ for pkg in ['chromadb', 'tiktoken', 'nltk', 'sklearn']:
     except Exception:
         pass
 
-for sub_pkg in ['api', 'novel_generator', 'core', 'chapter_blueprint', 'architecture_generator']:
+for sub_pkg in ['app', 'api', 'novel_generator', 'core', 'chapter_blueprint', 'architecture_generator']:
     if os.path.isdir(sub_pkg):
         hiddenimports += collect_submodules(sub_pkg)
 

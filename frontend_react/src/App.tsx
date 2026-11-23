@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Background, Controls, MiniMap, ReactFlow, type Connection } from '@xyflow/react';
+import { Background, Controls, MiniMap, ReactFlow, type Connection, type Edge } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
 import { useGraphStore } from './stores/useGraphStore';
@@ -24,7 +24,7 @@ export default function App() {
 
   // 强化补全：port_type 连线防呆校验（阻止非匹配类型连线与自身成环）
   const isValidConnection = useCallback(
-    (connection: Connection) => {
+    (connection: Edge | Connection) => {
       if (connection.source === connection.target) return false;
       const src = nodes.find((n) => n.id === connection.source);
       const tgt = nodes.find((n) => n.id === connection.target);

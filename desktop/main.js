@@ -129,22 +129,43 @@ function sendUpdateStatus(payload) {
 }
 
 let isManualUpdateCheck = false
+let downloadAttemptCount = 0
+const MAX_DOWNLOAD_ATTEMPTS = 2
+
+const OFFICIAL_FEED = {
+  provider: 'github',
+  owner: 'Xuen-zz',
+  repo: 'Make-Story-Comfortable',
+  releaseType: 'release',
+}
+
+const ACCELERATED_MIRROR_FEED = {
+  provider: 'generic',
+  url: 'https://ghproxy.net/https://github.com/Xuen-zz/Make-Story-Comfortable/releases/latest/download/',
+  channel: 'latest',
+}
+
+function applyFeedURL(useMirror = false) {
+  if (!autoUpdater) return
+  try {
+    if (useMirror) {
+      autoUpdater.setFeedURL(ACCELERATED_MIRROR_FEED)
+    } else {
+      autoUpdater.setFeedURL(OFFICIAL_FEED)
+    }
+  } catch (err) {
+    console.error('[NovelFlow AutoUpdater] setFeedURL error:', err)
+  }
+}
 
 function setupAutoUpdater() {
   if (!autoUpdater || !app.isPackaged) return
   autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.autoInstallOnAppQuit = false // 禁止退出静默安装，防止后台因进程锁死默默失败
+  autoUpdater.disableDifferentialDownload = true // 核心防死循环补丁：禁用易产生校验失败的 blockmap 差分下载
 
-  try {
-    autoUpdater.setFeedURL({
-      provider: 'github',
-      owner: 'Xuen-zz',
-      repo: 'Make-Story-Comfortable',
-      releaseType: 'release',
-    })
-  } catch (feedErr) {
-    console.error('[NovelFlow AutoUpdater] setFeedURL error:', feedErr)
-  }
+  // 默认启用国内高速镜像加速源
+  applyFeedURL(true)
 
   const logUpdate = (msg) => {
     try {
@@ -154,18 +175,19 @@ function setupAutoUpdater() {
   }
 
   autoUpdater.on('checking-for-update', () => {
-    logUpdate('Checking for update from GitHub Releases...')
+    logUpdate('Checking for update from GitHub Releases (Accelerated Mirror)...')
     if (isManualUpdateCheck) {
-      sendUpdateStatus({ status: 'checking', message: '正在连接 GitHub Releases 检查更新…' })
+      sendUpdateStatus({ status: 'checking', message: '正在连接高速镜像源检查版本更新…' })
     }
   })
   autoUpdater.on('update-available', (info) => {
     logUpdate(`Update available: v${info.version}`)
     isManualUpdateCheck = false
+    downloadAttemptCount = 0
     sendUpdateStatus({
       status: 'available',
       version: info.version,
-      message: `发现新版本 v${info.version} 可升级`,
+      message: `发现新版本 v${info.version}，可立即下载升级`,
     })
   })
   autoUpdater.on('update-not-available', (info) => {
@@ -182,21 +204,22 @@ function setupAutoUpdater() {
     sendUpdateStatus({
       status: 'downloading',
       percent: progress.percent,
-      message: `正在下载更新包…`,
+      message: `正在通过高速镜像下载更新包…`,
     })
   })
   autoUpdater.on('update-downloaded', (info) => {
     logUpdate(`Update downloaded: v${info.version}`)
+    downloadAttemptCount = 0
     sendUpdateStatus({
       status: 'downloaded',
       version: info.version,
-      message: `新版本 v${info.version} 下载完成，可立即重启安装`,
+      message: `新版本 v${info.version} 下载校验完成，可立即重启安装`,
     })
   })
   autoUpdater.on('error', (err) => {
     const errorMsg = err?.message || String(err)
     logUpdate(`Updater error: ${errorMsg}`)
-    if (isManualUpdateCheck) {
+    if (isManualUpdateCheck || downloadAttemptCount > 0) {
       sendUpdateStatus({
         status: 'error',
         message: `更新服务提示: ${errorMsg}`,
@@ -255,41 +278,77 @@ function registerIpc() {
       const payload = {
         status: 'up-to-date',
         version: app.getVersion(),
-        message: `当前版本 v${app.getVersion()}（开发模式；打包安装版支持 GitHub Releases 自动更新）`,
+        message: `当前版本 v${app.getVersion()}（开发模式；打包安装版支持一键自动更新）`,
       }
       sendUpdateStatus(payload)
       isManualUpdateCheck = false
       return payload
     }
+    // 优先通过国内高速镜像源检查
     try {
+      applyFeedURL(true)
       const result = await autoUpdater.checkForUpdates()
       const nextVer = result?.updateInfo?.version
       return {
         status: nextVer && nextVer !== app.getVersion() ? 'available' : 'up-to-date',
         version: nextVer || app.getVersion(),
       }
-    } catch (err) {
-      isManualUpdateCheck = false
-      const errorMsg = err?.message || String(err)
-      sendUpdateStatus({
-        status: 'error',
-        message: `检查更新失败: ${errorMsg}`,
-      })
-      return {
-        status: 'error',
-        message: errorMsg,
+    } catch (mirrorErr) {
+      // 镜像源若超时或不可用，自动平滑回退到官方源
+      try {
+        applyFeedURL(false)
+        const result = await autoUpdater.checkForUpdates()
+        const nextVer = result?.updateInfo?.version
+        return {
+          status: nextVer && nextVer !== app.getVersion() ? 'available' : 'up-to-date',
+          version: nextVer || app.getVersion(),
+        }
+      } catch (officialErr) {
+        isManualUpdateCheck = false
+        const errorMsg = officialErr?.message || String(officialErr)
+        sendUpdateStatus({
+          status: 'error',
+          message: `检查更新失败: ${errorMsg}`,
+        })
+        return {
+          status: 'error',
+          message: errorMsg,
+        }
       }
     }
   })
   ipcMain.handle('novelflow:download-update', async () => {
     if (autoUpdater && app.isPackaged) {
-      await autoUpdater.downloadUpdate()
+      if (downloadAttemptCount >= MAX_DOWNLOAD_ATTEMPTS) {
+        sendUpdateStatus({
+          status: 'error',
+          message: '自动下载多次未完成，建议使用“浏览器极速下载”获取安装包覆盖升级',
+        })
+        return
+      }
+      downloadAttemptCount += 1
+      try {
+        await autoUpdater.downloadUpdate()
+      } catch (err) {
+        const errorMsg = err?.message || String(err)
+        sendUpdateStatus({
+          status: 'error',
+          message: `下载中断: ${errorMsg}，可使用浏览器极速下载`,
+        })
+      }
     }
   })
   ipcMain.handle('novelflow:quit-and-install', async () => {
     if (autoUpdater && app.isPackaged) {
+      sendUpdateStatus({
+        status: 'installing',
+        message: '正在终止本地引擎并启动安装程序向导…',
+      })
       stopBackend()
-      autoUpdater.quitAndInstall()
+      // 等待 800ms 保证 Windows 完全释放可执行文件句柄
+      await new Promise((r) => setTimeout(r, 800))
+      // isSilent: false 前台显示安装向导，isForceRunAfter: true 安装完成后重启
+      autoUpdater.quitAndInstall(false, true)
     }
   })
 }

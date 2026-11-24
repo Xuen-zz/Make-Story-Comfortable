@@ -119,6 +119,15 @@ async function handleDownloadUpdate() {
 async function handleInstallUpdate() {
   await window.novelflowDesktop?.quitAndInstall()
 }
+
+function handleOpenBrowserDownload() {
+  const downloadUrl = 'https://ghproxy.net/https://github.com/Xuen-zz/Make-Story-Comfortable/releases/latest'
+  if (window.novelflowDesktop?.openExternal) {
+    window.novelflowDesktop.openExternal(downloadUrl)
+  } else {
+    window.open(downloadUrl, '_blank')
+  }
+}
 </script>
 
 <template>
@@ -221,6 +230,15 @@ async function handleInstallUpdate() {
           class="px-2.5 py-0.5 rounded bg-emerald-400 text-zinc-950 font-bold cursor-pointer"
         >
           重启并安装 v{{ updateBanner.version }}
+        </button>
+        <button
+          v-if="updateBanner.status === 'available' || updateBanner.status === 'error'"
+          @click="handleOpenBrowserDownload"
+          type="button"
+          class="px-2.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-emerald-400 border border-emerald-500/30 font-medium cursor-pointer"
+          title="使用系统默认浏览器直接下载完整安装包"
+        >
+          浏览器极速下载
         </button>
         <button @click="updateBanner = null" type="button" class="text-zinc-400 hover:text-white cursor-pointer">✕</button>
       </div>
